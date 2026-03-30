@@ -1,6 +1,16 @@
 // pages/index.jsx
 import { useState, useEffect, useCallback } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
+import {
+  computeProjectionV2,
+  computeConfidence,
+  isEarlySeasonDate,
+  log5,
+  bvpAdjusted,
+  bvpLambda,
+} from '../lib/projection.js';
+import MODEL_CONFIG from '../lib/model-config.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt = (v, d = 1) => (v == null || v === '' || isNaN(v)) ? '—' : Number(v).toFixed(d);
@@ -48,41 +58,6 @@ function gameState(status) {
   }
 }
 
-// ── Signal ────────────────────────────────────────────────────────────────────
-function signalCalc(avgK5, avgKvsTeam, oppKRank, swstrPct, fdLines, umpKAdj = 0) {
-  if (!avgK5) return null;
-
-  const oppAdj = oppKRank ? ((15 - oppKRank) / 14) * 1.5 : 0;
-  let projected = avgKvsTeam != null
-    ? (avgK5 * 0.5) + (avgKvsTeam * 0.3) + (avgK5 + oppAdj) * 0.2
-    : avgK5 + oppAdj;
-
-  if (swstrPct) {
-    if (swstrPct >= 14)      projected += 0.75;
-    else if (swstrPct >= 11) projected += 0.35;
-    else if (swstrPct < 8)   projected -= 0.5;
-  }
-  // Ump zone adjustment (typically -0.5 to +1.0)
-  projected += umpKAdj;
-  projected = Math.round(projected * 10) / 10;
-
-  if (!fdLines?.over?.line && !fdLines?.under?.line) {
-    return { projected, label: 'No FD Line', color: '#94a3b8', signal: 'NOLINE' };
-  }
-
-  const fdLine      = fdLines?.over?.line ?? fdLines?.under?.line;
-  const fdOverOdds  = fdLines?.over?.price;
-  const fdUnderOdds = fdLines?.under?.price;
-  const fmtOdds = (o) => o == null ? '' : o > 0 ? ` (+${o})` : ` (${o})`;
-
-  if (projected > fdLine + 0.4) {
-    return { projected, label: `BET OVER ${fdLine}`, sublabel: `proj ${projected}K${fmtOdds(fdOverOdds)}`, color: '#16a34a', signal: 'OVER' };
-  }
-  if (projected < fdLine - 0.4) {
-    return { projected, label: `BET UNDER ${fdLine}`, sublabel: `proj ${projected}K${fmtOdds(fdUnderOdds)}`, color: '#2563eb', signal: 'UNDER' };
-  }
-  return { projected, label: 'NEUTRAL', sublabel: `proj ${projected}K · FD line ${fdLine}`, color: '#64748b', signal: 'NEUTRAL' };
-}
 
 // ── Spark ─────────────────────────────────────────────────────────────────────
 function Spark({ values = [] }) {
@@ -141,7 +116,7 @@ function StatRow({ rows }) {
 }
 
 // ── K Bar — visual line vs projection ────────────────────────────────────────
-function KBar({ fdLine, projected, signal, fdLines, hasUmp }) {
+function KBar({ fdLine, projected, signal, fdLines, hasUmp, edge, pOver, confidence }) {
   if (!fdLine || !projected) return null;
 
   const min = 0;
@@ -150,13 +125,15 @@ function KBar({ fdLine, projected, signal, fdLines, hasUmp }) {
 
   const lineP = toP(fdLine);
   const projP = toP(projected);
-  const isOver = signal === 'OVER';
+  const isOver  = signal === 'OVER';
   const isUnder = signal === 'UNDER';
   const barColor = isOver ? '#16a34a' : isUnder ? '#2563eb' : '#94a3b8';
 
   const fdOverOdds  = fdLines?.over?.price;
   const fdUnderOdds = fdLines?.under?.price;
   const fmtOdds = o => o == null ? '' : o > 0 ? `+${o}` : `${o}`;
+  const fmtEdge = e => e == null ? null : `${e > 0 ? '+' : ''}${(e * 100).toFixed(1)}%`;
+  const gradeColor = g => g === 'A' ? '#16a34a' : g === 'B' ? '#65a30d' : g === 'C' ? '#d97706' : '#dc2626';
 
   return (
     <div>
@@ -167,7 +144,7 @@ function KBar({ fdLine, projected, signal, fdLines, hasUmp }) {
       }}>
         <div style={{
           fontSize: 13, fontWeight: 900, color: barColor, letterSpacing: '-0.2px',
-          display: 'flex', alignItems: 'center', gap: 5,
+          display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap',
         }}>
           {isOver ? '⬆' : isUnder ? '⬇' : '—'}
           {isOver ? `BET OVER ${fdLine}` : isUnder ? `BET UNDER ${fdLine}` : 'NEUTRAL'}
@@ -177,15 +154,35 @@ function KBar({ fdLine, projected, signal, fdLines, hasUmp }) {
           {isUnder && fdUnderOdds && (
             <span style={{ fontSize: 11, fontWeight: 600, color: '#64748b' }}>{fmtOdds(fdUnderOdds)}</span>
           )}
+          {edge != null && (isOver || isUnder) && (
+            <span style={{ fontSize: 10, fontWeight: 700, color: isOver ? '#16a34a' : '#2563eb' }}>
+              edge {fmtEdge(isUnder ? -edge : edge)}
+            </span>
+          )}
           {!hasUmp && (
             <span style={{ fontSize: 9, color: '#cbd5e1', marginLeft: 4 }}>ump TBD</span>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#64748b' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <img src="/img/fd.ico" width={14} height={14} style={{ objectFit: 'contain', borderRadius: 2 }} />
-              <strong style={{ color: '#1e293b' }}>{fdLine}</strong>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: '#64748b' }}>
+          {confidence && (
+            <span style={{
+              fontSize: 10, fontWeight: 800, color: gradeColor(confidence.grade),
+              background: gradeColor(confidence.grade) + '18',
+              border: `1px solid ${gradeColor(confidence.grade)}40`,
+              borderRadius: 5, padding: '1px 6px',
+            }} title={`Confidence ${confidence.grade} · ${confidence.score}/100 pts`}>
+              {confidence.grade}
             </span>
+          )}
+          {pOver != null && (
+            <span style={{ fontSize: 10, color: '#64748b' }}>
+              P(O) {(pOver * 100).toFixed(0)}%
+            </span>
+          )}
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <img src="/img/fd.ico" width={14} height={14} style={{ objectFit: 'contain', borderRadius: 2 }} />
+            <strong style={{ color: '#1e293b' }}>{fdLine}</strong>
+          </span>
           <span>Proj <strong style={{ color: barColor }}>{projected}</strong></span>
         </div>
       </div>
@@ -295,37 +292,52 @@ function VsTeamTable({ vsTeam, avgKvsTeam, oppAbbr }) {
   );
 }
 
-// ── Lineup K Projection ──────────────────────────────────────────────────────
-// Calculates expected Ks from tonight's specific batting lineup
-// Uses career K% vs this pitcher, falls back to season K%
-// Weighted by expected PAs per batting order position
-function calcLineupProjection(lineup, kRateMap) {
-  if (!lineup?.length || !kRateMap) return null;
-  let totalExpectedK = 0;
-  let hasRealData = false;
+// ── Lineup per-batter detail (for LineupCard display only) ───────────────────
+// Computes per-batter p_hat using log5 + BvP shrinkage for the expanded table.
+// Full projection is handled by computeProjectionV2 in PitcherPanel.
+function calcPerBatterDetail(lineup, kRateMap, pitcherKPct, pitcherKPctVsL, pitcherKPctVsR, bfHat) {
+  if (!lineup?.length) return [];
+  const kl = MODEL_CONFIG.league_k_pct;
+  const posWeights = MODEL_CONFIG.bf_position_weights;
+  const weightSum = posWeights.reduce((a, b) => a + b, 0);
 
-  for (const batter of lineup) {
-    const bvp = kRateMap[batter.id];
-    if (!bvp) continue;
-    const kPct = bvp.kPct ?? 0.22;
-    const expectedPA = batter.expectedPA ?? 3.7;
-    totalExpectedK += kPct * expectedPA;
-    if (bvp.source === 'career') hasRealData = true;
-  }
+  return lineup.map((batter, i) => {
+    const bvp = kRateMap?.[batter.id] ?? null;
+    const kb = bvp?.kPct ?? kl;
 
-  return {
-    projectedK: Math.round(totalExpectedK * 10) / 10,
-    hasCareerData: hasRealData,
-    batterCount: lineup.length,
-  };
+    // Pick pitcher K% by batter handedness
+    const hand = bvp?.batSide ?? batter.batSide ?? null;
+    let kp = pitcherKPct ?? kl;
+    if (hand === 'L' && pitcherKPctVsL != null) kp = pitcherKPctVsL;
+    else if (hand === 'R' && pitcherKPctVsR != null) kp = pitcherKPctVsR;
+
+    const pBase = log5(kb, kp, kl);
+    const pHat  = bvpAdjusted(pBase, bvp?.bvpKPct, bvp?.bvpPA);
+    const lambda = bvpLambda(bvp?.bvpPA ?? 0);
+
+    const w = posWeights[Math.min(i, posWeights.length - 1)];
+    const paVsSP = bfHat != null ? bfHat * (w / weightSum) : null;
+    const expK = paVsSP != null ? pHat * paVsSP : null;
+
+    return {
+      batter,
+      bvp,
+      pBase,
+      pHat,
+      lambda,
+      paVsSP,
+      expK,
+      hasBvP: bvp?.bvpPA != null && bvp.bvpPA >= 3,
+    };
+  });
 }
 
 // ── Lineup Display Component ──────────────────────────────────────────────────
-function LineupCard({ lineup, kRateMap, pitcherName }) {
+function LineupCard({ lineup, kRateMap, pitcherKPct, pitcherKPctVsL, pitcherKPctVsR, bfHat, v2kHat }) {
   const [expanded, setExpanded] = useState(false);
   if (!lineup?.length) return null;
 
-  const proj = calcLineupProjection(lineup, kRateMap);
+  const rows = calcPerBatterDetail(lineup, kRateMap, pitcherKPct, pitcherKPctVsL, pitcherKPctVsR, bfHat);
 
   return (
     <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: 10 }}>
@@ -341,14 +353,13 @@ function LineupCard({ lineup, kRateMap, pitcherName }) {
           <span style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
             Lineup · {lineup.length} batters confirmed
           </span>
-          {proj && (
+          {v2kHat != null && (
             <span style={{
               fontSize: 10, fontWeight: 700, color: '#dc2626',
               background: '#fef2f2', border: '1px solid #fecaca',
               borderRadius: 4, padding: '1px 6px', fontFamily: 'monospace',
             }}>
-              lineup proj {proj.projectedK}K
-              {!proj.hasCareerData && <span style={{ color: '#94a3b8', fontWeight: 400 }}> *</span>}
+              {v2kHat}K (log5)
             </span>
           )}
         </div>
@@ -364,58 +375,52 @@ function LineupCard({ lineup, kRateMap, pitcherName }) {
           }}>
             <span style={{ width: 16, fontSize: 9, color: '#cbd5e1' }}>#</span>
             <span style={{ flex: 1, fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Batter</span>
-            <span style={{ width: 36, fontSize: 9, color: '#94a3b8', textAlign: 'right', textTransform: 'uppercase', letterSpacing: '0.06em' }}>K%</span>
-            <span style={{ width: 30, fontSize: 9, color: '#94a3b8', textAlign: 'right', textTransform: 'uppercase', letterSpacing: '0.06em' }}>PA</span>
+            <span style={{ width: 38, fontSize: 9, color: '#94a3b8', textAlign: 'right', textTransform: 'uppercase', letterSpacing: '0.06em' }}>p̂</span>
+            <span style={{ width: 28, fontSize: 9, color: '#94a3b8', textAlign: 'right', textTransform: 'uppercase', letterSpacing: '0.06em' }}>PA</span>
             <span style={{ width: 36, fontSize: 9, color: '#94a3b8', textAlign: 'right', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Exp K</span>
           </div>
 
-          {lineup.map((batter, i) => {
-            const bvp = kRateMap?.[batter.id];
-            const kPct = bvp?.kPct ?? null;
-            const expK = kPct != null ? (kPct * batter.expectedPA) : null;
-            const isCareer = bvp?.source === 'career';
-
-            return (
-              <div key={i} style={{
-                display: 'flex', gap: 8, alignItems: 'center',
-                padding: '3px 0',
-                borderBottom: i < lineup.length - 1 ? '1px solid #f8fafc' : 'none',
+          {rows.map(({ batter, bvp, pHat, lambda, paVsSP, expK, hasBvP }, i) => (
+            <div key={i} style={{
+              display: 'flex', gap: 8, alignItems: 'center',
+              padding: '3px 0',
+              borderBottom: i < rows.length - 1 ? '1px solid #f8fafc' : 'none',
+            }}>
+              <span style={{ width: 16, fontSize: 10, color: '#cbd5e1', fontFamily: 'monospace' }}>{batter.battingOrder}</span>
+              <span style={{ flex: 1, fontSize: 11, color: '#1e293b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {batter.fullName}
+                {hasBvP && (
+                  <span style={{ fontSize: 9, color: '#94a3b8', marginLeft: 4 }}>
+                    ({bvp.bvpPA}PA·λ{Math.round(lambda * 100)}%)
+                  </span>
+                )}
+              </span>
+              <span style={{
+                width: 38, fontSize: 11, fontFamily: 'monospace', textAlign: 'right', fontWeight: 600,
+                color: pHat == null ? '#cbd5e1'
+                     : pHat >= 0.30 ? '#16a34a'
+                     : pHat >= 0.22 ? '#d97706'
+                     : '#dc2626',
               }}>
-                <span style={{ width: 16, fontSize: 10, color: '#cbd5e1', fontFamily: 'monospace' }}>{batter.battingOrder}</span>
-                <span style={{ flex: 1, fontSize: 11, color: '#1e293b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {batter.fullName}
-                  {isCareer && bvp.pa >= 10 && (
-                    <span style={{ fontSize: 9, color: '#94a3b8', marginLeft: 4 }}>({bvp.pa} PA)</span>
-                  )}
-                </span>
-                <span style={{
-                  width: 36, fontSize: 11, fontFamily: 'monospace', textAlign: 'right', fontWeight: 600,
-                  color: kPct == null ? '#cbd5e1'
-                       : kPct >= 0.30 ? '#16a34a'
-                       : kPct >= 0.22 ? '#d97706'
-                       : '#dc2626',
-                }}>
-                  {kPct != null ? `${Math.round(kPct * 100)}%` : '—'}
-                  {!isCareer && kPct != null && <span style={{ fontSize: 8, color: '#cbd5e1' }}>*</span>}
-                </span>
-                <span style={{ width: 30, fontSize: 10, color: '#94a3b8', textAlign: 'right', fontFamily: 'monospace' }}>
-                  {batter.expectedPA.toFixed(1)}
-                </span>
-                <span style={{
-                  width: 36, fontSize: 11, fontFamily: 'monospace', textAlign: 'right', fontWeight: 700,
-                  color: expK == null ? '#cbd5e1'
-                       : expK >= 1.2 ? '#16a34a'
-                       : expK >= 0.8 ? '#d97706'
-                       : '#dc2626',
-                }}>
-                  {expK != null ? expK.toFixed(1) : '—'}
-                </span>
-              </div>
-            );
-          })}
+                {pHat != null ? `${Math.round(pHat * 100)}%` : '—'}
+              </span>
+              <span style={{ width: 28, fontSize: 10, color: '#94a3b8', textAlign: 'right', fontFamily: 'monospace' }}>
+                {paVsSP != null ? paVsSP.toFixed(1) : '—'}
+              </span>
+              <span style={{
+                width: 36, fontSize: 11, fontFamily: 'monospace', textAlign: 'right', fontWeight: 700,
+                color: expK == null ? '#cbd5e1'
+                     : expK >= 1.2 ? '#16a34a'
+                     : expK >= 0.8 ? '#d97706'
+                     : '#dc2626',
+              }}>
+                {expK != null ? expK.toFixed(1) : '—'}
+              </span>
+            </div>
+          ))}
 
           <div style={{ fontSize: 9, color: '#cbd5e1', marginTop: 6 }}>
-            * = season K% used (no career matchup data) · green = high K rate · red = contact hitter
+            p̂ = log5(K%_batter, K%_pitcher, 22.2%) + BvP shrinkage · λ = BvP confidence weight
           </div>
         </div>
       )}
@@ -424,7 +429,15 @@ function LineupCard({ lineup, kRateMap, pitcherName }) {
 }
 
 // ── Pitcher Panel ─────────────────────────────────────────────────────────────
-function PitcherPanel({ pitcherData, savantData, propsData, oppTeamStats, oppAbbr, loading, state, umpKAdj = 0, lineup, kRateMap }) {
+function PitcherPanel({
+  pitcherData, savantData, propsData, oppTeamStats, oppAbbr,
+  loading, state,
+  strPct,      // umpire called-strike % (from ump data)
+  venueName,   // ballpark name (for park factor)
+  lineup, kRateMap,
+  gameDate,    // for early-season detection
+  onLogProjection,  // callback to log this projection
+}) {
   if (loading) {
     return (
       <div style={{ flex: 1, padding: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff' }}>
@@ -447,34 +460,82 @@ function PitcherPanel({ pitcherData, savantData, propsData, oppTeamStats, oppAbb
   const {
     pitcher, seasonStats, recentKs, avgKLast5, vsTeam, avgKvsTeam,
     avgIPLast10, avgPitchesLast10,
+    // v2 additions
+    starts2026, recentBF, seasonBF, priorBF,
+    pitcherKPct, pitcherKPctVsL, pitcherKPctVsR, pitcherBBPer9,
   } = pitcherData;
 
   const swstr   = savantData?.swstr_pct;
   const rc      = rankColor(oppTeamStats?.rank);
   const isPre   = state === 'pre';
-  const isLive  = state === 'live';
   const isFinal = state === 'final';
+  const earlySeasonMode = isEarlySeasonDate(gameDate);
 
   const normalize = s => s?.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
   const lastName  = normalize(pitcher?.fullName?.split(' ').pop());
   const prop      = isPre ? propsData?.find(p => normalize(p.pitcherName)?.includes(lastName)) : null;
   const fdLines   = prop?.lines?.fanduel ?? null;
-  // Lineup-based projection — blends with pitcher recent form
-  const lineupProj = lineup?.length ? calcLineupProjection(lineup, kRateMap) : null;
 
-  // Blended projection: 60% pitcher recent form, 40% lineup matchup (when available)
-  const blendedAvgK = lineupProj
-    ? (avgKLast5 ?? 0) * 0.6 + lineupProj.projectedK * 0.4
-    : avgKLast5;
+  // Team K factor: oppTeam K% / league avg K%
+  const teamKFactor = oppTeamStats?.teamKPct != null
+    ? oppTeamStats.teamKPct / MODEL_CONFIG.league_k_pct
+    : 1.0;
 
-  const sig = isPre ? signalCalc(blendedAvgK, avgKvsTeam, lineupProj ? null : oppTeamStats?.rank, swstr, fdLines, umpKAdj) : null;
-  const fdLine    = fdLines?.over?.line ?? fdLines?.under?.line ?? null;
+  // Estimate 2026 pitches for SwStr% shrinkage
+  const approxPitches2026 = (avgPitchesLast10 ?? 90) * (starts2026 ?? 0);
+
+  // ── v2 Projection ────────────────────────────────────────────────────────
+  const v2 = isPre ? computeProjectionV2({
+    // Stage 1: BF
+    recentBF, seasonBF, priorBF,
+    starts: starts2026,
+    pitchLimitBF: null,
+    oppOBP: oppTeamStats?.obp ?? null,
+    pitcherBBPer9,
+    // Stage 2: K%
+    lineup: lineup?.length > 0 ? lineup : null,
+    kRateMap,
+    pitcherKPct,
+    pitcherKPctVsL,
+    pitcherKPctVsR,
+    teamKFactor,
+    // Stage 3: Adjustments
+    swstrPct: swstr,
+    pitches2026: approxPitches2026 > 0 ? approxPitches2026 : null,
+    strPct,
+    venueName,
+    // Signal
+    fdLines,
+    isEarlySeason: earlySeasonMode,
+  }) : null;
+
+  // ── Confidence Scoring ───────────────────────────────────────────────────
+  const avgBvPLambda = lineup?.length > 0 && kRateMap
+    ? lineup.reduce((sum, b) => {
+        const pa = kRateMap[b.id]?.bvpPA ?? 0;
+        return sum + bvpLambda(pa);
+      }, 0) / lineup.length
+    : 0;
+
+  const confidence = isPre ? computeConfidence({
+    has3PlusStarts: (starts2026 ?? 0) >= 3,
+    hasLineup: (lineup?.length ?? 0) > 0,
+    hasBvP: avgBvPLambda > 0.15,
+    hasStuff: swstr != null && approxPitches2026 >= 400,
+    hasUmpire: strPct != null,
+    hasPark: MODEL_CONFIG.park_k_factors[venueName] != null,
+    hasOdds: fdLines?.over?.line != null || fdLines?.under?.line != null,
+  }) : null;
+
+  const fdLine = fdLines?.over?.line ?? fdLines?.under?.line ?? null;
 
   const statsRows = [
     ['ERA',        seasonStats?.era,                              false],
     ['K/9',        seasonStats?.kPer9,                            false],
     ['Season K',   seasonStats?.strikeOuts,                       false],
+    ['K%',         pitcherKPct != null ? `${(pitcherKPct*100).toFixed(1)}%` : null, false],
     ['Avg K (L5)', avgKLast5 != null ? fmt(avgKLast5, 1) : null,  true ],
+    ['BF̂',         v2?.bfHat != null ? v2.bfHat : null,          false],
     ['Avg IP (L10)',avgIPLast10 != null ? fmt(avgIPLast10,1) : null,false],
     ['Avg P (L10)', avgPitchesLast10 != null ? Math.round(avgPitchesLast10) : null, false],
     ...(swstr ? [['SwStr%', `${swstr}%`, true]] : []),
@@ -498,11 +559,17 @@ function PitcherPanel({ pitcherData, savantData, propsData, oppTeamStats, oppAbb
             </div>
             <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 3, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
               <span>{pitcher?.throws}HP · Age {pitcher?.age}</span>
+              {earlySeasonMode && (
+                <span style={{ color: '#d97706', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 3, padding: '0 4px', fontSize: 9 }}>early season</span>
+              )}
               {pitcherData?.usingFallback === 'full' && (
                 <span style={{ color: '#d97706', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 3, padding: '0 4px', fontSize: 9 }}>2025 data</span>
               )}
               {pitcherData?.usingFallback === 'partial' && (
                 <span style={{ color: '#94a3b8', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 3, padding: '0 4px', fontSize: 9 }}>partial 2025</span>
+              )}
+              {v2?.mode === 'B' && isPre && (
+                <span style={{ color: '#94a3b8', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 3, padding: '0 4px', fontSize: 9 }}>no lineup</span>
               )}
             </div>
             {/* Opp K rank inline */}
@@ -534,16 +601,57 @@ function PitcherPanel({ pitcherData, savantData, propsData, oppTeamStats, oppAbb
 
       <div style={{ height: 1, background: '#f1f5f9' }} />
 
-      {/* ── 2. K BAR (pre-game, has line + projection) ── */}
-      {isPre && sig && sig.signal !== 'NOLINE' && fdLine && sig.projected && (
-        <KBar fdLine={fdLine} projected={sig.projected} signal={sig.signal} fdLines={fdLines} hasUmp={umpKAdj !== 0} />
+      {/* ── 2. K BAR (pre-game, has line + v2 projection) ── */}
+      {isPre && v2 && v2.signal !== 'NOLINE' && fdLine && v2.kHat && (
+        <KBar
+          fdLine={fdLine}
+          projected={v2.kHat}
+          signal={v2.signal}
+          fdLines={fdLines}
+          hasUmp={strPct != null}
+          edge={v2.edge}
+          pOver={v2.pOver}
+          confidence={confidence}
+        />
       )}
 
       {/* No line yet but has projection */}
-      {isPre && (!fdLine || sig?.signal === 'NOLINE') && sig?.projected && (
+      {isPre && v2 && (!fdLine || v2.signal === 'NOLINE') && v2.kHat && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' }}>
-          <span style={{ fontSize: 11, color: '#94a3b8' }}>No FD line posted yet</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: '#64748b', fontFamily: 'monospace' }}>Proj {sig.projected}K</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 11, color: '#94a3b8' }}>No FD line posted yet</span>
+            {confidence && (
+              <span style={{
+                fontSize: 10, fontWeight: 800,
+                color: confidence.grade === 'A' ? '#16a34a' : confidence.grade === 'B' ? '#65a30d' : confidence.grade === 'C' ? '#d97706' : '#dc2626',
+              }}>Grade {confidence.grade}</span>
+            )}
+          </div>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#64748b', fontFamily: 'monospace' }}>Proj {v2.kHat}K</span>
+        </div>
+      )}
+
+      {/* Log projection button — pre-game only when we have a signal */}
+      {isPre && v2 && v2.kHat && onLogProjection && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            onClick={() => onLogProjection({
+              pitcherId: pitcher?.id,
+              pitcherName: pitcher?.fullName,
+              pitcherThrows: pitcher?.throws,
+              ...v2,
+              confidence: confidence?.score,
+              grade: confidence?.grade,
+              kRateHat: v2.kHat / (v2.bfHat || 1),
+            })}
+            style={{
+              fontSize: 9, color: '#94a3b8', background: '#f8fafc',
+              border: '1px solid #e2e8f0', borderRadius: 5, padding: '2px 8px',
+              cursor: 'pointer', fontWeight: 600,
+            }}
+          >
+            + Log projection
+          </button>
         </div>
       )}
 
@@ -594,16 +702,24 @@ function PitcherPanel({ pitcherData, savantData, propsData, oppTeamStats, oppAbb
       {/* ── 6. VS TEAM HISTORY ── */}
       <VsTeamTable vsTeam={vsTeam} avgKvsTeam={avgKvsTeam} oppAbbr={oppAbbr} />
 
-      {/* ── 7. LINEUP CARD ── */}
+      {/* ── 7. LINEUP CARD (expanded batter detail) ── */}
       {isPre && lineup?.length > 0 && (
-        <LineupCard lineup={lineup} kRateMap={kRateMap} pitcherName={pitcher?.fullName} />
+        <LineupCard
+          lineup={lineup}
+          kRateMap={kRateMap}
+          pitcherKPct={pitcherKPct}
+          pitcherKPctVsL={pitcherKPctVsL}
+          pitcherKPctVsR={pitcherKPctVsR}
+          bfHat={v2?.bfHat}
+          v2kHat={v2?.kHat}
+        />
       )}
     </div>
   );
 }
 
 // ── Game Card ─────────────────────────────────────────────────────────────────
-function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData, weather, ump, lineup, allBvpData }) {
+function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData, weather, ump, lineup, allBvpData, onLogProjection }) {
   const { away, home } = game;
   const state = gameState(game.status);
 
@@ -627,6 +743,9 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
   const homeBvpKey = home.probablePitcher ? `${home.probablePitcher.id}-${game.gamePk}` : null;
   const awayKRateMap = awayBvpKey ? (allBvpData?.[awayBvpKey]?.kRateMap ?? {}) : {};
   const homeKRateMap = homeBvpKey ? (allBvpData?.[homeBvpKey]?.kRateMap ?? {}) : {};
+
+  // v2: ump strPct for continuous umpire adjustment
+  const umpStrPct = ump?.strPct ?? null;
 
   const headerBg = state === 'live'  ? '#fef2f2'
                  : state === 'final' ? '#f8fafc'
@@ -752,9 +871,12 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
           oppAbbr={home.abbreviation}
           loading={awayLoading}
           state={state}
-          umpKAdj={ump?.kAdj ?? 0}
+          strPct={umpStrPct}
+          venueName={game.venue}
           lineup={homeLineup}
           kRateMap={awayKRateMap}
+          gameDate={game.gameDate}
+          onLogProjection={onLogProjection}
         />
         <div style={{ width: 1, background: '#f1f5f9', flexShrink: 0 }} />
         <PitcherPanel
@@ -765,9 +887,12 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
           oppAbbr={away.abbreviation}
           loading={homeLoading}
           state={state}
-          umpKAdj={ump?.kAdj ?? 0}
+          strPct={umpStrPct}
+          venueName={game.venue}
           lineup={awayLineup}
           kRateMap={homeKRateMap}
+          gameDate={game.gameDate}
+          onLogProjection={onLogProjection}
         />
       </div>
     </div>
@@ -790,6 +915,22 @@ export default function TheWhiff() {
   const [lastRefresh, setLastRefresh]   = useState(null);
   const [error, setError]               = useState(null);
   const [selectedDate, setSelectedDate] = useState(0); // 0=today, -1=yesterday, 1=tomorrow
+  const [loggedCount, setLoggedCount]   = useState(0);
+
+  // Log a projection to the predictions API
+  const handleLogProjection = useCallback(async (projection) => {
+    try {
+      const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      await fetch('/api/predictions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...projection, date: dateStr }),
+      });
+      setLoggedCount(c => c + 1);
+    } catch {
+      // silent
+    }
+  }, []);
 
   // Compute date string for the selected offset
   const getDateStr = (offset) => {
@@ -924,6 +1065,7 @@ export default function TheWhiff() {
       setLineupData(newLineup);
 
       // For games where lineup is available, fetch BvP K rates for each pitcher
+      // v2: pass pitcherThrows so the endpoint can return platoon-split K% for each batter
       const newBvp = {};
       for (const game of todayGames) {
         const lineup = newLineup[game.gamePk];
@@ -936,11 +1078,24 @@ export default function TheWhiff() {
           const pitcher = side.probablePitcher;
           if (!pitcher || !oppLineup?.length) continue;
           const batterIds = oppLineup.map(b => b.id).filter(Boolean).join(',');
+          // Extract pitcher handedness from already-fetched pitcher data
+          const pitcherKey = `${pitcher.id}-${side === game.away ? game.home.teamId : game.away.teamId}`;
+          const pitcherThrows = newPitcherData[pitcherKey]?.pitcher?.throws ?? '';
           try {
-            const bvpRes = await fetch(`/api/battervspitcher?pitcherId=${pitcher.id}&batterIds=${batterIds}`);
+            const bvpRes = await fetch(
+              `/api/battervspitcher?pitcherId=${pitcher.id}&batterIds=${batterIds}` +
+              (pitcherThrows ? `&pitcherThrows=${pitcherThrows}` : '')
+            );
             const bvpJson = await bvpRes.json();
+            // Merge batSide from lineup into kRateMap entries for log5 handedness matching
+            const mergedMap = { ...bvpJson.kRateMap };
+            for (const batter of oppLineup) {
+              if (mergedMap[batter.id]) {
+                mergedMap[batter.id].batSide = batter.batSide ?? mergedMap[batter.id].batSide ?? null;
+              }
+            }
             newBvp[`${pitcher.id}-${game.gamePk}`] = {
-              kRateMap: bvpJson.kRateMap ?? {},
+              kRateMap: mergedMap,
               lineup: oppLineup,
             };
           } catch { /* silent */ }
@@ -1042,6 +1197,23 @@ export default function TheWhiff() {
                 {lastRefresh && <div style={{ fontSize: 10, color: '#475569' }}>Updated {lastRefresh.toLocaleTimeString()}</div>}
               </div>
 
+              <Link href="/results" style={{
+                color: '#64748b', fontSize: 11, textDecoration: 'none',
+                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+                borderRadius: 6, padding: '5px 10px',
+                display: 'flex', alignItems: 'center', gap: 5,
+              }}>
+                📊
+                {loggedCount > 0 && (
+                  <span style={{
+                    background: '#dc2626', color: '#fff',
+                    borderRadius: '50%', width: 16, height: 16,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 9, fontWeight: 700,
+                  }}>{loggedCount}</span>
+                )}
+              </Link>
+
               <button onClick={() => load(selectedDate)} disabled={loading} style={{
                 background: loading ? 'rgba(255,45,45,0.06)' : 'rgba(255,45,45,0.12)',
                 border: '1px solid rgba(255,45,45,0.3)', color: '#ff6b6b',
@@ -1109,9 +1281,9 @@ export default function TheWhiff() {
                 </div>
               ))}
               <div style={{ marginLeft: 'auto', fontSize: 10, color: '#94a3b8', lineHeight: 1.8, textAlign: 'right' }}>
-                <div style={{ color: '#64748b', fontWeight: 600, marginBottom: 1 }}>How we project Ks</div>
-                <div>Avg K (last 5) · vs team history · opp K rank · SwStr% (Savant) · ump zone (when available)</div>
-                <div style={{ color: '#cbd5e1' }}>Signal = projection vs FanDuel line · ±0.4 K threshold</div>
+                <div style={{ color: '#64748b', fontWeight: 600, marginBottom: 1 }}>v2 Algorithm</div>
+                <div>K̂ = E[BF] × E[K%] · log5 matchup · BvP shrinkage · SwStr% (continuous) · ump zone (dampened)</div>
+                <div style={{ color: '#cbd5e1' }}>Signal = Poisson P(Over) vs implied odds · 5% edge threshold · Grade A–D</div>
               </div>
             </div>
           )}
@@ -1144,6 +1316,7 @@ export default function TheWhiff() {
                 ump={umpData[g.gamePk]}
                 lineup={lineupData[g.gamePk]}
                 allBvpData={bvpData}
+                onLogProjection={handleLogProjection}
               />
             ))}
           </div>
