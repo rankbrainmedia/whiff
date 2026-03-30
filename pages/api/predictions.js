@@ -9,44 +9,62 @@
 // Storage: Vercel Blob (persistent JSON file in the cloud).
 // Falls back to in-memory for local dev if BLOB_READ_WRITE_TOKEN is not set.
 
-import { put, list, head } from '@vercel/blob';
+import { put, list } from '@vercel/blob';
 
 const BLOB_PATH = 'predictions.json';
 
 // ---------------------------------------------------------------------------
-// Storage layer
+// Storage layer — Vercel Blob with in-memory cache per invocation
 // ---------------------------------------------------------------------------
+let cachedUrl = null;
 let memoryStore = null;
 
 async function readPredictions() {
-  // Try Vercel Blob first
-  try {
-    // List blobs to find our predictions file
-    const { blobs } = await list({ prefix: BLOB_PATH, limit: 1 });
-    if (blobs.length > 0) {
-      const res = await fetch(blobs[0].url);
+  // 1. If we already know the blob URL from a prior write in this invocation, use it
+  if (cachedUrl) {
+    try {
+      const res = await fetch(cachedUrl, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
-        return Array.isArray(data) ? data : [];
+        if (Array.isArray(data)) return data;
+      }
+    } catch {}
+  }
+
+  // 2. Try listing blobs to find the file
+  try {
+    const { blobs } = await list({ prefix: BLOB_PATH, limit: 10 });
+    // Find exact match (addRandomSuffix: false means pathname = BLOB_PATH)
+    const match = blobs.find(b => b.pathname === BLOB_PATH) || blobs[0];
+    if (match) {
+      cachedUrl = match.url;
+      const res = await fetch(match.url, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) return data;
       }
     }
   } catch (err) {
     // Blob not configured (local dev) — fall through
+    console.warn('[predictions] Blob read failed:', err.message);
   }
 
+  // 3. Fallback to in-memory
   return memoryStore ?? [];
 }
 
 async function writePredictions(predictions) {
   memoryStore = predictions;
   try {
-    await put(BLOB_PATH, JSON.stringify(predictions), {
+    const blob = await put(BLOB_PATH, JSON.stringify(predictions), {
       access: 'public',
       addRandomSuffix: false,
       contentType: 'application/json',
     });
-  } catch {
-    console.warn('[predictions] Blob write failed — using in-memory store only.');
+    cachedUrl = blob.url;
+    console.log('[predictions] Blob write OK:', blob.url, '| count:', predictions.length);
+  } catch (err) {
+    console.warn('[predictions] Blob write failed:', err.message);
   }
 }
 
@@ -57,6 +75,9 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     const { date, pitcherId, signal } = req.query;
     let predictions = await readPredictions();
+
+    console.log('[predictions] GET — total in store:', predictions.length,
+      '| filters:', JSON.stringify({ date, pitcherId, signal }));
 
     if (date) {
       predictions = predictions.filter(p => p.date === date);
@@ -120,6 +141,8 @@ export default async function handler(req, res) {
 
     predictions.push(prediction);
     await writePredictions(predictions);
+
+    console.log('[predictions] POST — logged:', prediction.pitcherName, '| new total:', predictions.length);
 
     return res.status(201).json({ prediction });
   }
