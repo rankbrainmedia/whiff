@@ -4,50 +4,59 @@
 // GET  /api/predictions          — return all logged predictions
 // GET  /api/predictions?date=... — filter by date (YYYY-MM-DD)
 // POST /api/predictions          — log a new projection
+// PATCH /api/predictions?id=...  — update actual result
 //
-// Storage: JSON file on disk (works in dev; Vercel KV recommended for production).
-// Schema per prediction:
-//   { id, date, pitcherId, pitcherName, pitcherThrows,
-//     kHat, bfHat, kRateHat, confidence, grade, edge, signal,
-//     line, overOdds, underOdds, mode, dStuff, dUmp, dPark,
-//     actualK, result, loggedAt }
+// Storage: Vercel Blob (persistent JSON file in the cloud).
+// Falls back to in-memory for local dev if BLOB_READ_WRITE_TOKEN is not set.
 
-import fs from 'fs';
-import path from 'path';
+import { put, list, head } from '@vercel/blob';
 
-const DATA_FILE = path.join(process.cwd(), 'data', 'predictions.json');
+const BLOB_PATH = 'predictions.json';
 
-// In-memory store for Vercel serverless (writes not persisted across invocations)
+// ---------------------------------------------------------------------------
+// Storage layer
+// ---------------------------------------------------------------------------
 let memoryStore = null;
 
-function readPredictions() {
+async function readPredictions() {
+  // Try Vercel Blob first
   try {
-    if (fs.existsSync(DATA_FILE)) {
-      const raw = fs.readFileSync(DATA_FILE, 'utf8');
-      return JSON.parse(raw);
+    // List blobs to find our predictions file
+    const { blobs } = await list({ prefix: BLOB_PATH, limit: 1 });
+    if (blobs.length > 0) {
+      const res = await fetch(blobs[0].url);
+      if (res.ok) {
+        const data = await res.json();
+        return Array.isArray(data) ? data : [];
+      }
     }
-  } catch {
-    // Fall through to memory store
+  } catch (err) {
+    // Blob not configured (local dev) — fall through
   }
+
   return memoryStore ?? [];
 }
 
-function writePredictions(predictions) {
+async function writePredictions(predictions) {
   memoryStore = predictions;
   try {
-    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify(predictions, null, 2), 'utf8');
+    await put(BLOB_PATH, JSON.stringify(predictions), {
+      access: 'public',
+      addRandomSuffix: false,
+      contentType: 'application/json',
+    });
   } catch {
-    // On Vercel production: filesystem is read-only, use memory only.
-    // For durable storage, configure Vercel KV and replace this with KV calls.
-    console.warn('[predictions] File write failed — using in-memory store only.');
+    console.warn('[predictions] Blob write failed — using in-memory store only.');
   }
 }
 
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
 export default async function handler(req, res) {
   if (req.method === 'GET') {
     const { date, pitcherId, signal } = req.query;
-    let predictions = readPredictions();
+    let predictions = await readPredictions();
 
     if (date) {
       predictions = predictions.filter(p => p.date === date);
@@ -74,7 +83,15 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'pitcherId and date required' });
     }
 
-    const predictions = readPredictions();
+    const predictions = await readPredictions();
+
+    // Prevent duplicate logs for same pitcher + date
+    const exists = predictions.find(
+      p => String(p.pitcherId) === String(body.pitcherId) && p.date === body.date
+    );
+    if (exists) {
+      return res.status(409).json({ error: 'Already logged', prediction: exists });
+    }
 
     const prediction = {
       id: `${body.date}-${body.pitcherId}-${Date.now()}`,
@@ -102,24 +119,23 @@ export default async function handler(req, res) {
     };
 
     predictions.push(prediction);
-    writePredictions(predictions);
+    await writePredictions(predictions);
 
     return res.status(201).json({ prediction });
   }
 
   if (req.method === 'PATCH') {
-    // Update actual result after game finishes
     const { id } = req.query;
     const { actualK, result } = req.body ?? {};
     if (!id) return res.status(400).json({ error: 'id required' });
 
-    const predictions = readPredictions();
+    const predictions = await readPredictions();
     const idx = predictions.findIndex(p => p.id === id);
     if (idx === -1) return res.status(404).json({ error: 'prediction not found' });
 
     if (actualK != null) predictions[idx].actualK = actualK;
     if (result   != null) predictions[idx].result  = result;
-    writePredictions(predictions);
+    await writePredictions(predictions);
 
     return res.status(200).json({ prediction: predictions[idx] });
   }
