@@ -4,6 +4,10 @@
 
 const BASE = 'https://statsapi.mlb.com/api/v1';
 
+// v2: Relative position weights (sum ≈ 8.97).
+// Scaled to starter's expected BF in the projection layer, not fixed PAs.
+const POSITION_WEIGHTS = [1.12, 1.07, 1.04, 1.02, 0.99, 0.97, 0.94, 0.92, 0.90];
+
 export default async function handler(req, res) {
   try {
     const { gamePk } = req.query;
@@ -26,7 +30,6 @@ export default async function handler(req, res) {
       return order.map((playerId, idx) => {
         const key = `ID${playerId}`;
         const player = players[key];
-        const stats = player?.stats?.batting ?? {};
         const seasonStats = player?.seasonStats?.batting ?? {};
 
         return {
@@ -34,7 +37,9 @@ export default async function handler(req, res) {
           id: playerId,
           fullName: player?.person?.fullName,
           position: player?.position?.abbreviation,
-          // Career season K stats for fallback
+          // Batter handedness — used by v2 log5 to pick pitcher split
+          batSide: player?.person?.batSide?.code ?? null,
+          // Season K stats for fallback K% when no career BvP data
           strikeOuts: seasonStats.strikeOuts ?? null,
           plateAppearances: seasonStats.plateAppearances ?? null,
           kPct: seasonStats.plateAppearances
@@ -47,23 +52,21 @@ export default async function handler(req, res) {
     const awayLineup = parseTeam(boxscore.teams?.away);
     const homeLineup = parseTeam(boxscore.teams?.home);
 
-    // Expected PAs by batting order position (based on historical averages)
-    // Leadoff gets most PAs, 9-hole gets fewest
-    const expectedPAs = [4.3, 4.1, 4.0, 3.9, 3.8, 3.7, 3.6, 3.5, 3.4];
-
-    const enrichWithPAs = (lineup) => {
+    // v2: Return relative weights instead of fixed expected PAs.
+    // The caller scales these to the starter's expected BF (BF̂ × w_i / Σw).
+    const enrichWithWeights = (lineup) => {
       if (!lineup) return null;
       return lineup.map((batter, i) => ({
         ...batter,
-        expectedPA: expectedPAs[i] ?? 3.5,
+        positionWeight: POSITION_WEIGHTS[i] ?? POSITION_WEIGHTS[POSITION_WEIGHTS.length - 1],
       }));
     };
 
     res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate');
     return res.status(200).json({
       available: !!(awayLineup && homeLineup),
-      away: enrichWithPAs(awayLineup),
-      home: enrichWithPAs(homeLineup),
+      away: enrichWithWeights(awayLineup),
+      home: enrichWithWeights(homeLineup),
     });
   } catch (err) {
     console.error('Lineup fetch error:', err);
