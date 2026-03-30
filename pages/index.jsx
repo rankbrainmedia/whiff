@@ -931,36 +931,50 @@ export default function TheWhiff() {
   const [loggedCount, setLoggedCount]   = useState(0);
   const [loggedIds, setLoggedIds]       = useState(new Set());
 
-  // Load today's logged predictions on mount (so badge survives navigation)
+  // --- localStorage-based prediction storage ---
+  const LS_KEY = 'whiff_predictions';
+
+  function readPredictions() {
+    try {
+      return JSON.parse(localStorage.getItem(LS_KEY) || '[]');
+    } catch { return []; }
+  }
+
+  function writePredictions(preds) {
+    localStorage.setItem(LS_KEY, JSON.stringify(preds));
+  }
+
+  // Load today's logged predictions on mount (survives refresh + navigation)
   useEffect(() => {
     const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-    fetch(`/api/predictions?date=${dateStr}`)
-      .then(r => r.json())
-      .then(d => {
-        const preds = d.predictions ?? [];
-        setLoggedCount(preds.length);
-        setLoggedIds(new Set(preds.map(p => String(p.pitcherId))));
-      })
-      .catch(() => {});
+    const all = readPredictions();
+    const today = all.filter(p => p.date === dateStr);
+    setLoggedCount(today.length);
+    setLoggedIds(new Set(today.map(p => String(p.pitcherId))));
   }, []);
 
-  // Log a projection to the predictions API
-  const handleLogProjection = useCallback(async (projection) => {
-    try {
-      const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-      const res = await fetch('/api/predictions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...projection, date: dateStr }),
-      });
-      if (res.ok) {
-        setLoggedCount(c => c + 1);
-        setLoggedIds(prev => new Set(prev).add(String(projection.pitcherId)));
-      }
-      // 409 = already logged, don't increment
-    } catch {
-      // silent
-    }
+  // Log a projection to localStorage
+  const handleLogProjection = useCallback((projection) => {
+    const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const all = readPredictions();
+
+    // Prevent duplicates
+    const exists = all.find(
+      p => String(p.pitcherId) === String(projection.pitcherId) && p.date === dateStr
+    );
+    if (exists) return;
+
+    const prediction = {
+      id: `${dateStr}-${projection.pitcherId}-${Date.now()}`,
+      date: dateStr,
+      ...projection,
+      loggedAt: new Date().toISOString(),
+    };
+
+    all.push(prediction);
+    writePredictions(all);
+    setLoggedCount(c => c + 1);
+    setLoggedIds(prev => new Set(prev).add(String(projection.pitcherId)));
   }, []);
 
   // Compute date string for the selected offset

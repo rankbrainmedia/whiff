@@ -105,11 +105,15 @@ export default function Results() {
   const [filter, setFilter]           = useState('all'); // all | OVER | UNDER
 
   useEffect(() => {
-    fetch('/api/predictions')
-      .then(r => r.json())
-      .then(d => setPredictions(d.predictions ?? []))
-      .catch(() => setPredictions([]))
-      .finally(() => setLoading(false));
+    try {
+      const all = JSON.parse(localStorage.getItem('whiff_predictions') || '[]');
+      // Sort newest first
+      all.sort((a, b) => new Date(b.loggedAt) - new Date(a.loggedAt));
+      setPredictions(all);
+    } catch {
+      setPredictions([]);
+    }
+    setLoading(false);
   }, []);
 
   const filtered = filter === 'all'
