@@ -1,0 +1,11 @@
+{
+  "functions": {
+    "api/savant.py": {
+      "runtime": "python3.9",
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    { "source": "/api/savant/:path*", "destination": "/api/savant" }
+  ]
+}
