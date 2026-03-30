@@ -437,6 +437,7 @@ function PitcherPanel({
   lineup, kRateMap,
   gameDate,    // for early-season detection
   onLogProjection,  // callback to log this projection
+  loggedIds,        // Set of pitcher IDs already logged today
 }) {
   if (loading) {
     return (
@@ -634,24 +635,34 @@ function PitcherPanel({
       {/* Log projection button — pre-game only when we have a signal */}
       {isPre && v2 && v2.kHat && onLogProjection && (
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <button
-            onClick={() => onLogProjection({
-              pitcherId: pitcher?.id,
-              pitcherName: pitcher?.fullName,
-              pitcherThrows: pitcher?.throws,
-              ...v2,
-              confidence: confidence?.score,
-              grade: confidence?.grade,
-              kRateHat: v2.kHat / (v2.bfHat || 1),
-            })}
-            style={{
-              fontSize: 9, color: '#94a3b8', background: '#f8fafc',
-              border: '1px solid #e2e8f0', borderRadius: 5, padding: '2px 8px',
-              cursor: 'pointer', fontWeight: 600,
-            }}
-          >
-            + Log projection
-          </button>
+          {loggedIds?.has(String(pitcher?.id)) ? (
+            <span style={{
+              fontSize: 9, color: '#16a34a', background: '#f0fdf4',
+              border: '1px solid #bbf7d0', borderRadius: 5, padding: '2px 8px',
+              fontWeight: 600,
+            }}>
+              ✓ Logged
+            </span>
+          ) : (
+            <button
+              onClick={() => onLogProjection({
+                pitcherId: pitcher?.id,
+                pitcherName: pitcher?.fullName,
+                pitcherThrows: pitcher?.throws,
+                ...v2,
+                confidence: confidence?.score,
+                grade: confidence?.grade,
+                kRateHat: v2.kHat / (v2.bfHat || 1),
+              })}
+              style={{
+                fontSize: 9, color: '#94a3b8', background: '#f8fafc',
+                border: '1px solid #e2e8f0', borderRadius: 5, padding: '2px 8px',
+                cursor: 'pointer', fontWeight: 600,
+              }}
+            >
+              + Log projection
+            </button>
+          )}
         </div>
       )}
 
@@ -719,7 +730,7 @@ function PitcherPanel({
 }
 
 // ── Game Card ─────────────────────────────────────────────────────────────────
-function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData, weather, ump, lineup, allBvpData, onLogProjection }) {
+function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData, weather, ump, lineup, allBvpData, onLogProjection, loggedIds }) {
   const { away, home } = game;
   const state = gameState(game.status);
 
@@ -877,6 +888,7 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
           kRateMap={awayKRateMap}
           gameDate={game.gameDate}
           onLogProjection={onLogProjection}
+          loggedIds={loggedIds}
         />
         <div style={{ width: 1, background: '#f1f5f9', flexShrink: 0 }} />
         <PitcherPanel
@@ -893,6 +905,7 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
           kRateMap={homeKRateMap}
           gameDate={game.gameDate}
           onLogProjection={onLogProjection}
+          loggedIds={loggedIds}
         />
       </div>
     </div>
@@ -916,17 +929,35 @@ export default function TheWhiff() {
   const [error, setError]               = useState(null);
   const [selectedDate, setSelectedDate] = useState(0); // 0=today, -1=yesterday, 1=tomorrow
   const [loggedCount, setLoggedCount]   = useState(0);
+  const [loggedIds, setLoggedIds]       = useState(new Set());
+
+  // Load today's logged predictions on mount (so badge survives navigation)
+  useEffect(() => {
+    const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    fetch(`/api/predictions?date=${dateStr}`)
+      .then(r => r.json())
+      .then(d => {
+        const preds = d.predictions ?? [];
+        setLoggedCount(preds.length);
+        setLoggedIds(new Set(preds.map(p => String(p.pitcherId))));
+      })
+      .catch(() => {});
+  }, []);
 
   // Log a projection to the predictions API
   const handleLogProjection = useCallback(async (projection) => {
     try {
       const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-      await fetch('/api/predictions', {
+      const res = await fetch('/api/predictions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...projection, date: dateStr }),
       });
-      setLoggedCount(c => c + 1);
+      if (res.ok) {
+        setLoggedCount(c => c + 1);
+        setLoggedIds(prev => new Set(prev).add(String(projection.pitcherId)));
+      }
+      // 409 = already logged, don't increment
     } catch {
       // silent
     }
@@ -1317,6 +1348,7 @@ export default function TheWhiff() {
                 lineup={lineupData[g.gamePk]}
                 allBvpData={bvpData}
                 onLogProjection={handleLogProjection}
+                loggedIds={loggedIds}
               />
             ))}
           </div>
