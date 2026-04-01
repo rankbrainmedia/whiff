@@ -384,6 +384,7 @@ function PitcherPanel({
   onLogProjection,  // callback to log this projection
   loggedIds,        // Set of pitcher IDs already logged today
   liveStats,        // { ks, ip, isCurrent, pitchCount } or null
+  cachedProjection, // v3: pre-computed projection from cron pipeline
 }) {
   if (loading) {
     return (
@@ -480,7 +481,7 @@ function PitcherPanel({
     ['ERA',        seasonStats?.era,                              false],
     ['K/9',        seasonStats?.kPer9,                            false],
     ['Season K',   seasonStats?.strikeOuts,                       false],
-    ['K%',         pitcherKPct != null ? `${(pitcherKPct*100).toFixed(1)}%` : null, false],
+    ['K%',         pitcherKPct != null ? `${(pitcherKPct*100).toFixed(1)}%${pitcherData?.pitcherKPctRaw != null && Math.abs(pitcherData.pitcherKPctRaw - pitcherKPct) > 0.005 ? ` ← ${(pitcherData.pitcherKPctRaw*100).toFixed(1)}%` : ''}` : null, false],
     ['Avg K (L5)', avgKLast5 != null ? fmt(avgKLast5, 1) : null,  true ],
     ['BF̂',         v2?.bfHat != null ? v2.bfHat : null,          false],
     ['Avg IP (L10)',avgIPLast10 != null ? fmt(avgIPLast10,1) : null,false],
@@ -764,6 +765,50 @@ function PitcherPanel({
         );
       })()}
 
+      {/* ── v3: NARRATIVE (from LLM narrator via cached projections) ── */}
+      {cachedProjection?.narrative && isPre && (
+        <div style={{
+          background: '#f0f4ff',
+          border: '1px solid #c7d2fe',
+          borderRadius: 8,
+          padding: '10px 12px',
+        }}>
+          <div style={{ fontSize: 9, color: '#6366f1', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, marginBottom: 4 }}>
+            The Whiff Says
+          </div>
+          <div style={{ fontSize: 12, color: '#334155', lineHeight: 1.6, fontStyle: 'italic' }}>
+            {cachedProjection.narrative}
+          </div>
+          {cachedProjection.scout?.flags?.length > 0 && (
+            <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
+              {cachedProjection.scout.flags.map(flag => (
+                <span key={flag} style={{
+                  fontSize: 9, color: '#d97706', background: '#fffbeb',
+                  border: '1px solid #fde68a', borderRadius: 4, padding: '1px 6px',
+                  fontWeight: 600,
+                }}>
+                  {flag.replace(/_/g, ' ')}
+                </span>
+              ))}
+            </div>
+          )}
+          {cachedProjection.teamHotCold && (
+            <div style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>
+              {cachedProjection.teamHotCold.ratio < 1
+                ? `⚡ ${oppAbbr} striking out ${Math.round((1 - cachedProjection.teamHotCold.ratio) * 100)}% less than expected lately`
+                : cachedProjection.teamHotCold.ratio > 1
+                ? `💨 ${oppAbbr} striking out ${Math.round((cachedProjection.teamHotCold.ratio - 1) * 100)}% more than expected lately`
+                : null}
+            </div>
+          )}
+          {cachedProjection.sameOpponent && (
+            <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>
+              📋 {cachedProjection.sameOpponent.games} prior start{cachedProjection.sameOpponent.games > 1 ? 's' : ''} vs {oppAbbr} this season → avg {Math.round(cachedProjection.sameOpponent.anchor * 10) / 10}K
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ height: 1, background: '#f1f5f9' }} />
 
       {/* ── RECENT Ks SPARKLINE ── */}
@@ -830,7 +875,7 @@ function PitcherPanel({
 }
 
 // ── Game Card ─────────────────────────────────────────────────────────────────
-function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData, weather, ump, lineup, allBvpData, onLogProjection, loggedIds, isAdmin, liveGameData }) {
+function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData, weather, ump, lineup, allBvpData, onLogProjection, loggedIds, isAdmin, liveGameData, cachedGame }) {
   const { away, home } = game;
   const state = gameState(game.status);
 
@@ -989,6 +1034,7 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
           onLogProjection={isAdmin ? onLogProjection : null}
           loggedIds={loggedIds}
           liveStats={liveGameData?.away?.[away.probablePitcher?.id] ?? null}
+          cachedProjection={cachedGame?.away ?? null}
         />
         <div className="pitcher-divider" style={{ width: 1, background: '#f1f5f9', flexShrink: 0 }} />
         <PitcherPanel
@@ -1007,6 +1053,7 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
           onLogProjection={isAdmin ? onLogProjection : null}
           loggedIds={loggedIds}
           liveStats={liveGameData?.home?.[home.probablePitcher?.id] ?? null}
+          cachedProjection={cachedGame?.home ?? null}
         />
       </div>
     </div>
@@ -1035,6 +1082,7 @@ export default function TheWhiff() {
   const [isAdmin, setIsAdmin]           = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [liveData, setLiveData]         = useState({});
+  const [cachedProjections, setCachedProjections] = useState(null); // v3 cron pipeline cache
   const adminChecked = useRef(false);
 
   // Check admin status and handle ?admin= URL trigger
@@ -1135,10 +1183,20 @@ export default function TheWhiff() {
     setError(null);
     setPitcherData({});
     setSavantData({});
+    setCachedProjections(null);
 
     const dateStr = getDateStr(dateOffset);
     const isPast  = dateOffset < 0;
     const isFuture = dateOffset > 0;
+
+    // v3: Try to load cached projections from cron pipeline
+    try {
+      const cachedRes = await fetch(`/api/cached-projections?date=${dateStr}`);
+      const cachedData = await cachedRes.json();
+      if (cachedData?.games && Object.keys(cachedData.games).length > 0) {
+        setCachedProjections(cachedData.games);
+      }
+    } catch { /* silent — fall back to live fetching */ }
 
     try {
       setStatus('Fetching schedule…');
@@ -1582,9 +1640,9 @@ export default function TheWhiff() {
                 </div>
               ))}
               <div style={{ marginLeft: 'auto', fontSize: 10, color: '#94a3b8', lineHeight: 1.8, textAlign: 'right' }}>
-                <div style={{ color: '#64748b', fontWeight: 600, marginBottom: 1 }}>v2 Algorithm</div>
-                <div>K̂ = E[BF] × E[K%] · log5 matchup · BvP shrinkage · SwStr% (continuous) · ump zone (dampened)</div>
-                <div style={{ color: '#cbd5e1' }}>Signal = Poisson P(Over) vs implied odds · 5% edge threshold · Grade A–D</div>
+                <div style={{ color: '#64748b', fontWeight: 600, marginBottom: 1 }}>v3 Algorithm</div>
+                <div>K̂ = E[BF] × E[K%] · log5 · BvP shrinkage · K% shrinkage · team hot/cold · same-opp anchor</div>
+                <div style={{ color: '#cbd5e1' }}>Signal = Poisson P(Over) vs implied odds · AI scout + narrator · Grade A–D</div>
               </div>
             </div>
           )}
@@ -1621,6 +1679,7 @@ export default function TheWhiff() {
                 loggedIds={loggedIds}
                 isAdmin={isAdmin}
                 liveGameData={liveData[g.gamePk] ?? null}
+                cachedGame={cachedProjections?.[`game_${g.gamePk}`] ?? null}
               />
             ))}
           </div>
