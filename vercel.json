@@ -2,9 +2,6 @@
   "functions": {
     "api/savant.py": {
       "maxDuration": 30
-    },
-    "api/cron/refresh-projections.js": {
-      "maxDuration": 300
     }
   },
   "rewrites": [
