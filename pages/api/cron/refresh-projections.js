@@ -19,8 +19,7 @@ import { computeSameOpponentAnchor } from '../../../lib/same-opponent.js';
 import { computeTeamKHotCold } from '../../../lib/team-hot-cold.js';
 import { runScout, buildScoutInput } from '../../../lib/llm-scout.js';
 import { generateNarrative } from '../../../lib/llm-narrator.js';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { writeCache, readCache } from '../../../lib/store.js';
 
 const BASE = 'https://statsapi.mlb.com/api/v1';
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
@@ -53,24 +52,10 @@ function todayStr() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
 
-// ── Data paths (Vercel uses /tmp for writable files) ────────────────────────
+// ── Blob storage keys ───────────────────────────────────────────────────────
 
-function projPath(date) {
-  const dir = '/tmp/whiff-projections';
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  return join(dir, `${date}.json`);
-}
-
-function statePath() { return '/tmp/whiff-refresh-state.json'; }
-
-function readJSON(path) {
-  try { return JSON.parse(readFileSync(path, 'utf8')); }
-  catch { return {}; }
-}
-
-function writeJSON(path, data) {
-  writeFileSync(path, JSON.stringify(data, null, 2));
-}
+function projKey(date) { return `projections/${date}`; }
+function stateKey() { return 'refresh-state'; }
 
 // ── Fetch FanDuel K props ──────────────────────────────────────────────────
 
@@ -497,11 +482,11 @@ export default async function handler(req, res) {
   const earlySeasonMode = isEarlySeasonDate(date);
 
   try {
-    // Load state
-    const state = readJSON(statePath());
+    // Load state from blob
+    const state = (await readCache(stateKey())) || {};
     if (!state[date]) state[date] = {};
 
-    const projections = readJSON(projPath(date));
+    const projections = (await readCache(projKey(date))) || {};
 
     // Fetch schedule
     const games = await fetchSchedule(date);
@@ -693,9 +678,9 @@ export default async function handler(req, res) {
       processed++;
     }
 
-    // Save
-    writeJSON(statePath(), state);
-    writeJSON(projPath(date), projections);
+    // Save to blob
+    await writeCache(stateKey(), state);
+    await writeCache(projKey(date), projections);
 
     return res.status(200).json({
       date,
