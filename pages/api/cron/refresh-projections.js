@@ -302,15 +302,18 @@ async function buildProjection({
   const teamKFactor = oppTeamStats?.teamKPct != null
     ? oppTeamStats.teamKPct / MODEL_CONFIG.league_k_pct : 1.0;
 
-  // Same-opponent anchor (current season only)
+  // Same-opponent anchor (current season preferred, prior season fallback)
   const vsTeamThisSeason = gameLog.filter(g => g.opponent?.id === opponentTeamId);
+  const vsTeamPriorSeason = priorGameLog.filter(g => g.opponent?.id === opponentTeamId);
+  const mapVsTeam = (games) => games.map(g => ({
+    strikeOuts: g.stat?.strikeOuts ?? 0,
+    isHome: g.isHome ?? null,
+    date: g.date,
+  }));
   const sameOpponent = computeSameOpponentAnchor(
-    vsTeamThisSeason.map(g => ({
-      strikeOuts: g.stat?.strikeOuts ?? 0,
-      isHome: g.isHome ?? null,
-      date: g.date,
-    })),
-    isHome
+    mapVsTeam(vsTeamThisSeason),
+    isHome,
+    mapVsTeam(vsTeamPriorSeason)
   );
 
   // Team hot/cold
