@@ -432,8 +432,14 @@ function PitcherPanel({
   // Estimate 2026 pitches for SwStr% shrinkage
   const approxPitches2026 = (avgPitchesLast10 ?? 90) * (starts2026 ?? 0);
 
-  // ── v2 Projection ────────────────────────────────────────────────────────
-  const v2 = isPre ? computeProjectionV2({
+  // ── v3 Projection: prefer cached (cron pipeline) over live computation ──
+  // Cached projections include scout, narrator, same-opponent, team hot/cold.
+  // Only fall back to live computation if cache is unavailable.
+  const cachedProj = cachedProjection?.projection ?? null;
+  const cachedConf = cachedProjection?.confidence ?? null;
+  const cachedFdLines = cachedProjection?.fdLines ?? null;
+
+  const v2 = isPre ? (cachedProj || computeProjectionV2({
     // Stage 1: BF
     recentBF, seasonBF, priorBF,
     starts: starts2026,
@@ -455,7 +461,7 @@ function PitcherPanel({
     // Signal
     fdLines,
     isEarlySeason: earlySeasonMode,
-  }) : null;
+  })) : null;
 
   // ── Confidence Scoring ───────────────────────────────────────────────────
   const avgBvPLambda = lineup?.length > 0 && kRateMap
@@ -465,7 +471,7 @@ function PitcherPanel({
       }, 0) / lineup.length
     : 0;
 
-  const confidence = isPre ? computeConfidence({
+  const confidence = isPre ? (cachedConf || computeConfidence({
     has3PlusStarts: (starts2026 ?? 0) >= 3,
     hasLineup: (lineup?.length ?? 0) > 0,
     hasBvP: avgBvPLambda > 0.02,
@@ -473,9 +479,11 @@ function PitcherPanel({
     hasUmpire: strPct != null,
     hasPark: MODEL_CONFIG.park_k_factors[venueName] != null,
     hasOdds: fdLines?.over?.line != null || fdLines?.under?.line != null,
-  }) : null;
+  })) : null;
 
-  const fdLine = fdLines?.over?.line ?? fdLines?.under?.line ?? null;
+  // Use cached FD lines if available (ensures narrative matches displayed line)
+  const effectiveFdLines = cachedFdLines || fdLines;
+  const fdLine = effectiveFdLines?.over?.line ?? effectiveFdLines?.under?.line ?? null;
 
   const statsRows = [
     ['ERA',        seasonStats?.era,                              false],
@@ -676,7 +684,7 @@ function PitcherPanel({
           { key: 'BvP',           active: avgBvPLambda > 0.02, desc: 'Batter vs pitcher history' },
           { key: 'Umpire',        active: strPct != null, desc: 'Called strike tendency' },
           { key: 'Park',          active: hasPark, desc: 'Ballpark K-rate factor' },
-          { key: 'FD Odds',       active: !!(fdLines?.over?.line || fdLines?.under?.line), desc: 'FanDuel K prop lines' },
+          { key: 'FD Odds',       active: !!(effectiveFdLines?.over?.line || effectiveFdLines?.under?.line), desc: 'FanDuel K prop lines' },
           { key: 'Vs Team',       active: (pitcherData?.vsTeam?.length ?? 0) > 0, desc: 'Past starts vs this team' },
           { key: 'Weather',       active: false, desc: 'Game-time conditions' },
         ];

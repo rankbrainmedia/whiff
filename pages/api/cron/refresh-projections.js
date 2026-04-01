@@ -428,6 +428,7 @@ async function buildProjection({
     swstrPct,
     confidenceGrade: confidence.grade,
     confidenceScore: confidence.score,
+    avgKLast5,
   });
 
   // Build recent Ks for sparkline
