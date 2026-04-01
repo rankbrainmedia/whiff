@@ -481,10 +481,11 @@ export default async function handler(req, res) {
 
   const date = todayStr();
   const earlySeasonMode = isEarlySeasonDate(date);
+  const forceRefresh = req.query.force === 'true' || req.query.force === '1';
 
   try {
-    // Load state from blob
-    const state = (await readCache(stateKey())) || {};
+    // Load state from blob (reset if force refresh)
+    const state = forceRefresh ? {} : ((await readCache(stateKey())) || {});
     if (!state[date]) state[date] = {};
 
     const projections = (await readCache(projKey(date))) || {};
