@@ -1,5 +1,5 @@
 // pages/index.jsx
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import {
@@ -115,131 +115,76 @@ function StatRow({ rows }) {
   );
 }
 
-// ── K Bar — visual line vs projection ────────────────────────────────────────
-function KBar({ fdLine, projected, signal, fdLines, hasUmp, edge, pOver, confidence }) {
+// ── Collapsible Stats ─────────────────────────────────────────────────────────
+function CollapsibleStats({ rows }) {
+  const [open, setOpen] = useState(false);
+  if (!rows || rows.length === 0) return null;
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: '100%', background: 'none', border: 'none', cursor: 'pointer',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '4px 0',
+        }}
+      >
+        <span style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+          Pitcher Stats
+        </span>
+        <span style={{ fontSize: 10, color: '#94a3b8' }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && <StatRow rows={rows} />}
+    </div>
+  );
+}
+
+// ── K Bar — dual stacked bars: FD line (blue) + K̂ projection (green/red) ─────
+function KBar({ fdLine, projected, signal }) {
   if (!fdLine || !projected) return null;
 
-  const min = 0;
-  const max = Math.max(fdLine, projected) + 3;
-  const toP = v => Math.min(100, Math.max(0, ((v - min) / (max - min)) * 100));
-
+  const max = Math.max(fdLine, projected) + 2;
+  const toP = v => Math.min(100, Math.max(0, (v / max) * 100));
   const lineP = toP(fdLine);
   const projP = toP(projected);
   const isOver  = signal === 'OVER';
   const isUnder = signal === 'UNDER';
-  const barColor = isOver ? '#16a34a' : isUnder ? '#2563eb' : '#94a3b8';
+  const projColor = isOver ? '#16a34a' : isUnder ? '#dc2626' : '#94a3b8';
 
-  const fdOverOdds  = fdLines?.over?.price;
-  const fdUnderOdds = fdLines?.under?.price;
-  const fmtOdds = o => o == null ? '' : o > 0 ? `+${o}` : `${o}`;
-  const fmtEdge = e => e == null ? null : `${e > 0 ? '+' : ''}${(e * 100).toFixed(1)}%`;
-  const gradeColor = g => g === 'A' ? '#16a34a' : g === 'B' ? '#65a30d' : g === 'C' ? '#d97706' : '#dc2626';
+  const Bar = ({ pct, color, icon, label, labelColor }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ fontSize: 14, lineHeight: 1, flexShrink: 0, width: 18, textAlign: 'center' }}>{icon}</span>
+      <div style={{ flex: 1, position: 'relative', height: 16, background: '#e2e8f0', borderRadius: 8 }}>
+        <div style={{
+          position: 'absolute', left: 0, top: 0, bottom: 0,
+          width: `${pct}%`,
+          background: color,
+          borderRadius: 8,
+        }} />
+      </div>
+      <span style={{
+        fontSize: 11, fontFamily: 'monospace', fontWeight: 700,
+        color: labelColor, flexShrink: 0, minWidth: 28, textAlign: 'right',
+      }}>{label}</span>
+    </div>
+  );
 
   return (
-    <div>
-      {/* Signal label */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        marginBottom: 8,
-      }}>
-        <div style={{
-          fontSize: 13, fontWeight: 900, color: barColor, letterSpacing: '-0.2px',
-          display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap',
-        }}>
-          {isOver ? '⬆' : isUnder ? '⬇' : '—'}
-          {isOver ? `BET OVER ${fdLine}` : isUnder ? `BET UNDER ${fdLine}` : 'NEUTRAL'}
-          {isOver && fdOverOdds && (
-            <span style={{ fontSize: 11, fontWeight: 600, color: '#64748b' }}>{fmtOdds(fdOverOdds)}</span>
-          )}
-          {isUnder && fdUnderOdds && (
-            <span style={{ fontSize: 11, fontWeight: 600, color: '#64748b' }}>{fmtOdds(fdUnderOdds)}</span>
-          )}
-          {edge != null && (isOver || isUnder) && (
-            <span style={{ fontSize: 10, fontWeight: 700, color: isOver ? '#16a34a' : '#2563eb' }}>
-              edge {fmtEdge(isUnder ? -edge : edge)}
-            </span>
-          )}
-          {!hasUmp && (
-            <span style={{ fontSize: 9, color: '#cbd5e1', marginLeft: 4 }}>ump TBD</span>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: '#64748b' }}>
-          {confidence && (
-            <span style={{
-              fontSize: 10, fontWeight: 800, color: gradeColor(confidence.grade),
-              background: gradeColor(confidence.grade) + '18',
-              border: `1px solid ${gradeColor(confidence.grade)}40`,
-              borderRadius: 5, padding: '1px 6px',
-            }} title={`Confidence ${confidence.grade} · ${confidence.score}/100 pts`}>
-              {confidence.grade}
-            </span>
-          )}
-          {pOver != null && (
-            <span style={{ fontSize: 10, color: '#64748b' }}>
-              P(O) {(pOver * 100).toFixed(0)}%
-            </span>
-          )}
-          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <img src="/img/fd.ico" width={14} height={14} style={{ objectFit: 'contain', borderRadius: 2 }} />
-            <strong style={{ color: '#1e293b' }}>{fdLine}</strong>
-          </span>
-          <span>Proj <strong style={{ color: barColor }}>{projected}</strong></span>
-        </div>
-      </div>
-
-      {/* Track */}
-      <div style={{ position: 'relative', height: 8, background: '#f1f5f9', borderRadius: 4, marginBottom: 30 }}>
-        {/* Fill between line and proj */}
-        <div style={{
-          position: 'absolute',
-          left: `${Math.min(lineP, projP)}%`,
-          width: `${Math.abs(projP - lineP)}%`,
-          height: '100%',
-          background: barColor,
-          opacity: 0.25,
-          borderRadius: 4,
-        }} />
-
-        {/* FD line marker */}
-        <div style={{
-          position: 'absolute',
-          left: `${lineP}%`,
-          top: -3, bottom: -3,
-          width: 3,
-          background: '#94a3b8',
-          borderRadius: 2,
-          transform: 'translateX(-50%)',
-        }} />
-
-        {/* Projection marker */}
-        <div style={{
-          position: 'absolute',
-          left: `${projP}%`,
-          top: -4, bottom: -4,
-          width: 4,
-          background: barColor,
-          borderRadius: 2,
-          transform: 'translateX(-50%)',
-          boxShadow: `0 0 6px ${barColor}80`,
-        }} />
-
-        {/* Labels below track — stagger if too close */}
-        {(() => {
-          const tooClose = Math.abs(projP - lineP) < 15;
-          return (<>
-            <div style={{
-              position: 'absolute', top: tooClose ? 14 : 14,
-              left: `${lineP}%`, transform: 'translateX(-50%)',
-              fontSize: 9, color: '#94a3b8', whiteSpace: 'nowrap', fontWeight: 600,
-            }}>line {fdLine}</div>
-            <div style={{
-              position: 'absolute', top: tooClose ? 24 : 14,
-              left: `${projP}%`, transform: 'translateX(-50%)',
-              fontSize: 9, color: barColor, whiteSpace: 'nowrap', fontWeight: 700,
-            }}>{projected}K</div>
-          </>);
-        })()}
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <Bar
+        pct={lineP}
+        color="#2563eb"
+        icon={<img src="/img/fd.ico" width={14} height={14} style={{ objectFit: 'contain', borderRadius: 2 }} />}
+        label={fdLine}
+        labelColor="#2563eb"
+      />
+      <Bar
+        pct={projP}
+        color={projColor}
+        icon={<span style={{ fontSize: 13, fontWeight: 900, color: projColor }}>{isOver ? '↑' : isUnder ? '↓' : '—'}</span>}
+        label={`${projected}K`}
+        labelColor={projColor}
+      />
     </div>
   );
 }
@@ -438,6 +383,7 @@ function PitcherPanel({
   gameDate,    // for early-season detection
   onLogProjection,  // callback to log this projection
   loggedIds,        // Set of pitcher IDs already logged today
+  liveStats,        // { ks, ip, isCurrent, pitchCount } or null
 }) {
   if (loading) {
     return (
@@ -521,7 +467,7 @@ function PitcherPanel({
   const confidence = isPre ? computeConfidence({
     has3PlusStarts: (starts2026 ?? 0) >= 3,
     hasLineup: (lineup?.length ?? 0) > 0,
-    hasBvP: avgBvPLambda > 0.15,
+    hasBvP: avgBvPLambda > 0.02,
     hasStuff: swstr != null && approxPitches2026 >= 400,
     hasUmpire: strPct != null,
     hasPark: MODEL_CONFIG.park_k_factors[venueName] != null,
@@ -543,96 +489,136 @@ function PitcherPanel({
   ].filter(([, v]) => v != null);
 
   return (
-    <div style={{ flex: 1, padding: '12px 14px', background: '#fff', display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ flex: 1, minWidth: 0, padding: '12px 14px', background: '#fff', display: 'flex', flexDirection: 'column', gap: 10 }}>
 
-      {/* ── 1. NAME ROW ── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <img
-            src={`https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${pitcher?.id}/headshot/67/current`}
-            width={44} height={58}
-            style={{ objectFit: 'cover', objectPosition: 'top', borderRadius: 6, flexShrink: 0, opacity: isFinal ? 0.5 : 1, border: '1px solid #f1f5f9', background: '#f8fafc' }}
-            onError={e => { e.target.src = 'https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/0/headshot/67/current'; }}
-          />
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: isFinal ? '#94a3b8' : '#0f172a', letterSpacing: '-0.3px', lineHeight: 1.2 }}>
-              {pitcher?.fullName}
-            </div>
-            <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 3, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-              <span>{pitcher?.throws}HP · Age {pitcher?.age}</span>
-              {earlySeasonMode && (
-                <span style={{ color: '#d97706', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 3, padding: '0 4px', fontSize: 9 }}>early season</span>
-              )}
-              {pitcherData?.usingFallback === 'full' && (
-                <span style={{ color: '#d97706', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 3, padding: '0 4px', fontSize: 9 }}>2025 data</span>
-              )}
-              {pitcherData?.usingFallback === 'partial' && (
-                <span style={{ color: '#94a3b8', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 3, padding: '0 4px', fontSize: 9 }}>partial 2025</span>
-              )}
-              {v2?.mode === 'B' && isPre && (
-                <span style={{ color: '#94a3b8', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 3, padding: '0 4px', fontSize: 9 }}>no lineup</span>
-              )}
-            </div>
-            {/* Opp K rank inline */}
-            <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em' }}>vs {oppAbbr}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: rc }}>
-                {oppTeamStats?.rank ? ordinal(oppTeamStats.rank) + ' most Ks' : '—'}
-              </span>
-              {oppTeamStats?.kPerGame && (
-                <span style={{ fontSize: 10, color: '#94a3b8' }}>({fmt(oppTeamStats.kPerGame, 1)}/g)</span>
-              )}
-              <span style={{ fontSize: 13 }}>
-                {oppTeamStats?.rank
-                  ? oppTeamStats.rank <= 8  ? '😎'
-                  : oppTeamStats.rank <= 20 ? '😐'
-                  : '😰' : ''}
-              </span>
-            </div>
+      {/* ── 1. NAME ROW (full width, no signal badge competing) ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <img
+          src={`https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${pitcher?.id}/headshot/67/current`}
+          width={52} height={68}
+          style={{ objectFit: 'cover', objectPosition: 'top', borderRadius: 8, flexShrink: 0, opacity: isFinal ? 0.5 : 1, border: '1px solid #f1f5f9', background: '#f8fafc' }}
+          onError={e => { e.target.src = 'https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/0/headshot/67/current'; }}
+        />
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 800, color: isFinal ? '#94a3b8' : '#0f172a', letterSpacing: '-0.3px', lineHeight: 1.2 }}>
+            {pitcher?.fullName}
           </div>
-        </div>
-
-        {/* Status badges */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-          {isFinal && (
-            <div style={{ fontSize: 9, fontWeight: 700, color: '#94a3b8', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 5, padding: '2px 7px' }}>✓ FINAL</div>
-          )}
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+            {pitcher?.throws}HP · Age {pitcher?.age}
+          </div>
+          <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+            {isPre && starts2026 != null && starts2026 <= 1 && (
+              <span style={{ fontSize: 9, fontWeight: 700, color: '#d97706', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 5px' }}>
+                1st Start This Season
+              </span>
+            )}
+            {earlySeasonMode && !(starts2026 != null && starts2026 <= 1) && (
+              <span style={{ fontSize: 8, fontWeight: 600, color: '#d97706', letterSpacing: '0.02em' }}>early season</span>
+            )}
+            {isFinal && (
+              <span style={{ fontSize: 9, fontWeight: 700, color: '#94a3b8', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 4, padding: '1px 5px' }}>✓ FINAL</span>
+            )}
+          </div>
         </div>
       </div>
 
-      <div style={{ height: 1, background: '#f1f5f9' }} />
-
-      {/* ── 2. K BAR (pre-game, has line + v2 projection) ── */}
-      {isPre && v2 && v2.signal !== 'NOLINE' && fdLine && v2.kHat && (
-        <KBar
-          fdLine={fdLine}
-          projected={v2.kHat}
-          signal={v2.signal}
-          fdLines={fdLines}
-          hasUmp={strPct != null}
-          edge={v2.edge}
-          pOver={v2.pOver}
-          confidence={confidence}
-        />
-      )}
-
-      {/* No line yet but has projection */}
-      {isPre && v2 && (!fdLine || v2.signal === 'NOLINE') && v2.kHat && (
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 11, color: '#94a3b8' }}>No FD line posted yet</span>
-            {confidence && (
-              <span style={{
-                fontSize: 10, fontWeight: 800,
-                color: confidence.grade === 'A' ? '#16a34a' : confidence.grade === 'B' ? '#65a30d' : confidence.grade === 'C' ? '#d97706' : '#dc2626',
-              }}>Grade {confidence.grade}</span>
-            )}
+      {/* ── LIVE K TRACKER ── */}
+      {state === 'live' && liveStats && (
+        <div style={{
+          background: '#0f172a', borderRadius: 8, padding: '10px 14px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{
+              display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+              background: liveStats.isCurrent ? '#dc2626' : '#64748b',
+              animation: liveStats.isCurrent ? 'pulse 1.5s ease-in-out infinite' : 'none',
+              flexShrink: 0,
+            }} />
+            <span style={{
+              fontSize: 28, fontWeight: 900, fontFamily: 'monospace',
+              color: (fdLine && liveStats.ks > fdLine) || (v2?.kHat && liveStats.ks >= v2.kHat) ? '#22c55e' : '#f1f5f9',
+              lineHeight: 1,
+            }}>
+              {liveStats.ks}K
+            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                {liveStats.ip} IP{liveStats.pitchCount ? ` · ${liveStats.pitchCount}P` : ''}
+              </span>
+              <span style={{ fontSize: 10, color: liveStats.isCurrent ? '#fbbf24' : liveStats.isOnBench ? '#94a3b8' : '#64748b', fontWeight: 600 }}>
+                {liveStats.isCurrent ? 'Currently Pitching' : liveStats.isOnBench ? 'Done' : ''}
+              </span>
+            </div>
           </div>
-          <span style={{ fontSize: 13, fontWeight: 700, color: '#64748b', fontFamily: 'monospace' }}>Proj {v2.kHat}K</span>
+          {avgKLast5 != null && (
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Projected</div>
+              <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: '#94a3b8' }}>{fmt(avgKLast5, 1)}K</div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Log projection button — pre-game only when we have a signal */}
+      {/* ── 1b. SIGNAL BAR (branded, full-width) ── */}
+      {isPre && v2?.kHat && (() => {
+        const isOver  = v2.signal === 'OVER';
+        const isUnder = v2.signal === 'UNDER';
+        const isNeutral = v2.signal === 'NEUTRAL';
+        const hasLine = !!(fdLine && v2.signal !== 'NOLINE');
+        const barBg = isOver ? '#0c2e1a' : isUnder ? '#2e0c0c' : '#1e293b';
+        const signalColor = isOver ? '#22c55e' : isUnder ? '#ef4444' : '#94a3b8';
+        return (
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            background: barBg, borderRadius: 8, padding: '10px 14px', gap: 6,
+          }}>
+            {/* Line 1: THE WHIFF. INDEX: */}
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+              <span style={{ fontSize: 9, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 600 }}>THE</span>
+              <span style={{
+                fontSize: 12, fontWeight: 900, color: '#f1f5f9',
+                fontFamily: "'Playfair Display', Georgia, serif",
+                fontStyle: 'italic', letterSpacing: '-0.3px',
+              }}>WHIFF<span style={{ color: '#ee0c0c' }}>.</span></span>
+              <span style={{ fontSize: 9, color: '#f1f5f9', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', marginLeft: 2 }}>INDEX:</span>
+            </div>
+            {/* Line 2: Signal */}
+            {hasLine ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 15, fontWeight: 900, color: signalColor }}>
+                  {isOver ? '↑' : isUnder ? '↓' : '—'}
+                </span>
+                <span style={{ fontSize: 15, fontWeight: 900, color: signalColor, letterSpacing: '0.02em' }}>
+                  {isOver ? 'OVER' : isUnder ? 'UNDER' : 'NEUTRAL'}
+                </span>
+                <span style={{ fontSize: 20, fontWeight: 900, color: '#f1f5f9', fontFamily: 'monospace' }}>
+                  {fdLine}
+                </span>
+              </div>
+            ) : isNeutral ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 15, fontWeight: 900, color: '#94a3b8' }}>—</span>
+                <span style={{ fontSize: 15, fontWeight: 900, color: '#94a3b8', letterSpacing: '0.02em' }}>NEUTRAL</span>
+                <span style={{ fontSize: 20, fontWeight: 900, color: '#f1f5f9', fontFamily: 'monospace' }}>{fdLine || v2.kHat}</span>
+              </div>
+            ) : (
+              <span style={{ fontSize: 16, fontWeight: 700, color: '#94a3b8', fontFamily: 'monospace' }}>
+                Proj {v2.kHat}K
+              </span>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── 2. K BAR (dual stacked) — right under signal bar ── */}
+      {isPre && v2 && v2.signal !== 'NOLINE' && fdLine && v2.kHat && (
+        <KBar fdLine={fdLine} projected={v2.kHat} signal={v2.signal} />
+      )}
+
+      {/* (Projection info moved into Confidence section below) */}
+
+      {/* ── 4. LOG PROJECTION BUTTON ── */}
       {isPre && v2 && v2.kHat && onLogProjection && (
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           {loggedIds?.has(String(pitcher?.id)) ? (
@@ -666,7 +652,121 @@ function PitcherPanel({
         </div>
       )}
 
-      {/* ── 3. RECENT Ks SPARKLINE ── */}
+      {/* ── 5. CONFIDENCE ── */}
+      {isPre && (() => {
+        const gradeColor = g => g === 'A' ? '#16a34a' : g === 'B' ? '#65a30d' : g === 'C' ? '#d97706' : '#dc2626';
+        const gradeLabel = g => g === 'A' ? 'High' : g === 'B' ? 'Good' : g === 'C' ? 'Moderate' : 'Low';
+        const fmtEdge = e => e == null ? null : `${e > 0 ? '+' : ''}${(e * 100).toFixed(1)}%`;
+        const isOver  = v2?.signal === 'OVER';
+        const isUnder = v2?.signal === 'UNDER';
+        // Fuzzy park lookup — MLB API returns full names like "Oriole Park at Camden Yards"
+        const hasPark = venueName && Object.keys(MODEL_CONFIG.park_k_factors).some(
+          k => venueName.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(venueName.toLowerCase())
+        );
+        // Savant: green if we have swstr data, amber if endpoint was attempted but returned nothing
+        const hasSavant = swstr != null;
+        const savantAttempted = savantData !== undefined;
+        // All algorithm data sources
+        const algoComponents = [
+          { key: 'Pitcher Stats',  active: !!(pitcherData?.seasonStats || pitcherData?.recentKs?.length > 0), desc: 'K/9, ERA, recent starts' },
+          { key: 'Opp K Rank',    active: !!oppTeamStats?.rank, desc: 'Team strikeout tendency' },
+          { key: 'Savant',        active: hasSavant, pending: !hasSavant && savantAttempted, desc: 'SwStr%, pitch whiff rates (data source temporarily unavailable early season)' },
+          { key: 'Lineup',        active: (lineup?.length ?? 0) > 0, desc: 'Confirmed batting order' },
+          { key: 'BvP',           active: avgBvPLambda > 0.02, desc: 'Batter vs pitcher history' },
+          { key: 'Umpire',        active: strPct != null, desc: 'Called strike tendency' },
+          { key: 'Park',          active: hasPark, desc: 'Ballpark K-rate factor' },
+          { key: 'FD Odds',       active: !!(fdLines?.over?.line || fdLines?.under?.line), desc: 'FanDuel K prop lines' },
+          { key: 'Vs Team',       active: (pitcherData?.vsTeam?.length ?? 0) > 0, desc: 'Past starts vs this team' },
+          { key: 'Weather',       active: false, desc: 'Game-time conditions' },
+        ];
+        const activeCount = algoComponents.filter(c => c.active).length;
+        const totalRelevant = algoComponents.length;
+        const anyMissing = activeCount < totalRelevant;
+        return (
+          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px' }}>
+            {/* Header row: "Confidence" + grade */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#1e293b', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Confidence
+              </span>
+              {confidence && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: gradeColor(confidence.grade) }}>
+                    {gradeLabel(confidence.grade)}
+                  </span>
+                  <div style={{
+                    width: 30, height: 30, borderRadius: 7,
+                    background: gradeColor(confidence.grade),
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }} title={`${confidence.score}/100 pts`}>
+                    <span style={{ fontSize: 16, fontWeight: 900, color: '#fff' }}>{confidence.grade}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+            {/* vs Opponent K rank */}
+            {oppTeamStats?.rank && (() => {
+              const emoji = oppTeamStats.rank <= 8  ? '😎'
+                          : oppTeamStats.rank <= 20 ? '😐'
+                          : '😰';
+              return (
+                <div style={{ fontSize: 13, color: '#64748b', display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginBottom: 6 }}>
+                  <span>vs <strong style={{ color: '#1e293b' }}>{oppAbbr}</strong></span>
+                  <span style={{ color: rc, fontWeight: 700 }}>{ordinal(oppTeamStats.rank)} most Ks</span>
+                  {oppTeamStats.kPerGame && (
+                    <span style={{ color: '#94a3b8', fontSize: 12 }}>({fmt(oppTeamStats.kPerGame, 1)}/g)</span>
+                  )}
+                  <span style={{ fontSize: 18 }}>{emoji}</span>
+                </div>
+              );
+            })()}
+            {/* K̂, Edge, P(O) data line */}
+            {v2?.kHat && (
+              <div style={{ fontSize: 13, color: '#64748b', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+                <span>K̂ <strong style={{ fontFamily: 'monospace', color: '#1e293b', fontSize: 14 }}>{v2.kHat}</strong></span>
+                {v2.edge != null && (isOver || isUnder) && (
+                  <span style={{ fontWeight: 700, fontSize: 13, color: isOver ? '#16a34a' : '#dc2626' }}>
+                    edge {fmtEdge(isUnder ? -v2.edge : v2.edge)}
+                  </span>
+                )}
+                {v2.pOver != null && (
+                  <span style={{ color: '#94a3b8', fontSize: 12 }}>P(O) {(v2.pOver * 100).toFixed(0)}%</span>
+                )}
+              </div>
+            )}
+            {/* Algorithm component pills */}
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+              {algoComponents.map(({ key, active, pending, desc }) => {
+                const bg = active ? '#f0fdf4' : pending ? '#fffbeb' : '#fef2f2';
+                const border = active ? '#bbf7d0' : pending ? '#fde68a' : '#fecaca';
+                const dotColor = active ? '#16a34a' : pending ? '#d97706' : '#dc2626';
+                const textColor = active ? '#15803d' : pending ? '#92400e' : '#b91c1c';
+                return (
+                  <div key={key} title={desc} style={{
+                    display: 'flex', alignItems: 'center', gap: 4,
+                    padding: '3px 8px', borderRadius: 12,
+                    background: bg, border: `1px solid ${border}`,
+                    cursor: 'default',
+                  }}>
+                    <div style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
+                    <span style={{ fontSize: 10, fontWeight: 500, color: textColor }}>{key}</span>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Explainer when data is missing */}
+            {anyMissing && (
+              <div style={{ fontSize: 10, color: '#92400e', marginTop: 8, lineHeight: 1.5, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 8px' }}>
+                Projection may shift as more data becomes available pre-game.
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      <div style={{ height: 1, background: '#f1f5f9' }} />
+
+      {/* ── RECENT Ks SPARKLINE ── */}
       {recentKs?.length > 0 && (
         <div>
           <div style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>
@@ -686,10 +786,10 @@ function PitcherPanel({
 
       <div style={{ height: 1, background: '#f1f5f9' }} />
 
-      {/* ── 4. COMPACT STATS TABLE ── */}
-      <StatRow rows={statsRows} />
+      {/* ── COMPACT STATS TABLE (collapsed by default) ── */}
+      <CollapsibleStats rows={statsRows} />
 
-      {/* ── 5. PITCH MIX ── */}
+      {/* ── PITCH MIX ── */}
       {savantData?.vs_batter?.pitch_mix?.length > 0 && (
         <div>
           <div style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>
@@ -710,10 +810,10 @@ function PitcherPanel({
         </div>
       )}
 
-      {/* ── 6. VS TEAM HISTORY ── */}
+      {/* ── VS TEAM HISTORY ── */}
       <VsTeamTable vsTeam={vsTeam} avgKvsTeam={avgKvsTeam} oppAbbr={oppAbbr} />
 
-      {/* ── 7. LINEUP CARD (expanded batter detail) ── */}
+      {/* ── LINEUP CARD (expanded batter detail) ── */}
       {isPre && lineup?.length > 0 && (
         <LineupCard
           lineup={lineup}
@@ -730,7 +830,7 @@ function PitcherPanel({
 }
 
 // ── Game Card ─────────────────────────────────────────────────────────────────
-function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData, weather, ump, lineup, allBvpData, onLogProjection, loggedIds }) {
+function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData, weather, ump, lineup, allBvpData, onLogProjection, loggedIds, isAdmin, liveGameData }) {
   const { away, home } = game;
   const state = gameState(game.status);
 
@@ -777,66 +877,65 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
       onMouseLeave={e => { e.currentTarget.style.boxShadow = state === 'final' ? '0 1px 3px rgba(0,0,0,0.04)' : '0 2px 12px rgba(0,0,0,0.08)'; }}
     >
       {/* Game header */}
-      <div style={{
+      <div className="game-card-header" style={{
         background: headerBg,
         borderBottom: `1px solid ${state === 'live' ? '#fecaca' : '#e2e8f0'}`,
-        padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: '10px 16px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <img
-            src={`https://a.espncdn.com/i/teamlogos/mlb/500/${espnSlug(away.abbreviation)}.png`}
-            width={34} height={34}
-            style={{ objectFit: 'contain', opacity: state === 'final' ? 0.35 : 1 }}
-            onError={e => { e.target.style.display = 'none'; }}
-          />
-          <span style={{ color: '#cbd5e1', fontWeight: 300, fontSize: 16 }}>@</span>
-          <img
-            src={`https://a.espncdn.com/i/teamlogos/mlb/500/${espnSlug(home.abbreviation)}.png`}
-            width={34} height={34}
-            style={{ objectFit: 'contain', opacity: state === 'final' ? 0.35 : 1 }}
-            onError={e => { e.target.style.display = 'none'; }}
-          />
-          {game.venue && (
-            <span style={{
-              fontSize: 10, color: '#94a3b8', background: '#fff',
-              border: '1px solid #e2e8f0', borderRadius: 4, padding: '1px 7px', marginLeft: 4,
-            }}>{game.venue}</span>
-          )}
-          {ump?.name && (
-            <span style={{
-              fontSize: 10, color: '#64748b',
-              background: '#f8fafc', border: '1px solid #e2e8f0',
-              borderRadius: 4, padding: '2px 8px', marginLeft: 4,
-            }}>
-              Umpire: {ump.name}
-            </span>
-          )}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {state === 'live' && (
-            <span style={{
-              fontSize: 10, fontWeight: 700, color: '#dc2626',
-              background: '#fff', border: '1px solid #fecaca',
-              borderRadius: 4, padding: '2px 8px', letterSpacing: '0.06em',
-              display: 'flex', alignItems: 'center', gap: 4,
-            }}>
-              <span style={{ display: 'inline-block', width: 5, height: 5, borderRadius: '50%', background: '#dc2626', animation: 'pulse 1.5s ease-in-out infinite' }} />
-              LIVE
-            </span>
-          )}
-          {state === 'final' && (
-            <span style={{
-              fontSize: 10, fontWeight: 600, color: '#94a3b8',
-              background: '#fff', border: '1px solid #e2e8f0',
-              borderRadius: 4, padding: '2px 8px',
-            }}>✓ Final</span>
-          )}
+        {/* Row 1: logos + status + weather (right) */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <img
+              src={`https://a.espncdn.com/i/teamlogos/mlb/500/${espnSlug(away.abbreviation)}.png`}
+              width={34} height={34}
+              style={{ objectFit: 'contain', opacity: state === 'final' ? 0.35 : 1 }}
+              onError={e => { e.target.style.display = 'none'; }}
+            />
+            <span style={{ color: '#64748b', fontWeight: 500, fontSize: 16 }}>@</span>
+            <img
+              src={`https://a.espncdn.com/i/teamlogos/mlb/500/${espnSlug(home.abbreviation)}.png`}
+              width={34} height={34}
+              style={{ objectFit: 'contain', opacity: state === 'final' ? 0.35 : 1 }}
+              onError={e => { e.target.style.display = 'none'; }}
+            />
+            {state === 'live' && (
+              <span style={{
+                fontSize: 10, fontWeight: 700, color: '#dc2626',
+                background: '#fff', border: '1px solid #fecaca',
+                borderRadius: 4, padding: '2px 8px', letterSpacing: '0.06em',
+                display: 'flex', alignItems: 'center', gap: 4,
+              }}>
+                <span style={{ display: 'inline-block', width: 5, height: 5, borderRadius: '50%', background: '#dc2626', animation: 'pulse 1.5s ease-in-out infinite' }} />
+                LIVE
+              </span>
+            )}
+            {state === 'final' && (
+              <span style={{
+                fontSize: 10, fontWeight: 600, color: '#94a3b8',
+                background: '#fff', border: '1px solid #e2e8f0',
+                borderRadius: 4, padding: '2px 8px',
+              }}>✓ Final</span>
+            )}
+          </div>
           {weather?.found && !weather?.hasAlert && (
-            <span style={{ fontSize: 10, color: '#94a3b8' }}>
+            <span style={{ fontSize: 13, color: '#1e293b', fontWeight: 600, fontStyle: 'italic', flexShrink: 0 }}>
               {weather.temp}°F · {weather.windSpeed}mph
             </span>
           )}
-          <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>{time}</span>
+        </div>
+        {/* Row 2: venue · time · umpire */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5, flexWrap: 'wrap' }}>
+          {game.venue && (
+            <span style={{ fontSize: 11, color: '#64748b' }}>{game.venue}</span>
+          )}
+          <span style={{ color: '#cbd5e1' }}>·</span>
+          <span style={{ fontSize: 11, color: '#1e293b', fontFamily: 'monospace', fontWeight: 700 }}>{time}</span>
+          {ump?.name && (
+            <>
+              <span style={{ color: '#cbd5e1' }}>·</span>
+              <span style={{ fontSize: 11, color: '#475569' }}>Umpire: {ump.name}</span>
+            </>
+          )}
         </div>
       </div>
 
@@ -851,7 +950,7 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
           : weather.maxLevel === 'medium' ? '#fde68a'
           : '#bae6fd'}`,
           padding: '6px 16px',
-          display: 'flex', flexDirection: 'column', gap: 3,
+          display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'center', textAlign: 'center',
         }}>
           {weather.alerts.map((alert, i) => (
             <div key={i} style={{
@@ -873,7 +972,7 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
       )}
 
       {/* Pitchers side by side */}
-      <div style={{ display: 'flex' }}>
+      <div className="pitcher-panels" style={{ display: 'flex', overflow: 'hidden' }}>
         <PitcherPanel
           pitcherData={awayPitcher}
           savantData={awaySavant}
@@ -887,10 +986,11 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
           lineup={homeLineup}
           kRateMap={awayKRateMap}
           gameDate={game.gameDate}
-          onLogProjection={onLogProjection}
+          onLogProjection={isAdmin ? onLogProjection : null}
           loggedIds={loggedIds}
+          liveStats={liveGameData?.away?.[away.probablePitcher?.id] ?? null}
         />
-        <div style={{ width: 1, background: '#f1f5f9', flexShrink: 0 }} />
+        <div className="pitcher-divider" style={{ width: 1, background: '#f1f5f9', flexShrink: 0 }} />
         <PitcherPanel
           pitcherData={homePitcher}
           savantData={homeSavant}
@@ -904,8 +1004,9 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
           lineup={awayLineup}
           kRateMap={homeKRateMap}
           gameDate={game.gameDate}
-          onLogProjection={onLogProjection}
+          onLogProjection={isAdmin ? onLogProjection : null}
           loggedIds={loggedIds}
+          liveStats={liveGameData?.home?.[home.probablePitcher?.id] ?? null}
         />
       </div>
     </div>
@@ -930,52 +1031,89 @@ export default function TheWhiff() {
   const [selectedDate, setSelectedDate] = useState(0); // 0=today, -1=yesterday, 1=tomorrow
   const [loggedCount, setLoggedCount]   = useState(0);
   const [loggedIds, setLoggedIds]       = useState(new Set());
+  const [migrated, setMigrated]         = useState(false);
+  const [isAdmin, setIsAdmin]           = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [liveData, setLiveData]         = useState({});
+  const adminChecked = useRef(false);
 
-  // --- localStorage-based prediction storage ---
-  const LS_KEY = 'whiff_predictions';
-
-  function readPredictions() {
-    try {
-      return JSON.parse(localStorage.getItem(LS_KEY) || '[]');
-    } catch { return []; }
-  }
-
-  function writePredictions(preds) {
-    localStorage.setItem(LS_KEY, JSON.stringify(preds));
-  }
-
-  // Load today's logged predictions on mount (survives refresh + navigation)
+  // Check admin status and handle ?admin= URL trigger
   useEffect(() => {
-    const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-    const all = readPredictions();
-    const today = all.filter(p => p.date === dateStr);
-    setLoggedCount(today.length);
-    setLoggedIds(new Set(today.map(p => String(p.pitcherId))));
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const adminParam = params.get('admin');
+
+    async function checkAdmin() {
+      if (adminParam) {
+        // Try to set cookie via POST
+        try {
+          await fetch('/api/admin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ secret: adminParam }),
+          });
+        } catch { /* silent */ }
+        // Remove the param from URL
+        const url = new URL(window.location.href);
+        url.searchParams.delete('admin');
+        window.history.replaceState({}, '', url.pathname);
+      }
+
+      try {
+        const res = await fetch('/api/admin');
+        const data = await res.json();
+        setIsAdmin(data.isAdmin === true);
+      } catch { /* silent */ }
+    }
+
+    if (!adminChecked.current) {
+      adminChecked.current = true;
+      checkAdmin();
+    }
   }, []);
 
-  // Log a projection to localStorage
+  // Load today's logged prediction count from API on mount
+  useEffect(() => {
+    async function loadPredictions() {
+      try {
+        const res = await fetch('/api/predictions');
+        const data = await res.json();
+        const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        const today = (data.predictions || []).filter(p => p.date === dateStr);
+        setLoggedCount(today.length);
+        setLoggedIds(new Set(today.map(p => String(p.pitcherId))));
+      } catch { /* silent */ }
+    }
+    loadPredictions();
+  }, []);
+
+  // Log a projection via API
+  // Serialize log requests to prevent race conditions on the blob store
+  const logQueue = useRef(Promise.resolve());
+
   const handleLogProjection = useCallback((projection) => {
+    if (!isAdmin) return;
     const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-    const all = readPredictions();
 
-    // Prevent duplicates
-    const exists = all.find(
-      p => String(p.pitcherId) === String(projection.pitcherId) && p.date === dateStr
-    );
-    if (exists) return;
+    // Optimistic UI update
+    const pidStr = String(projection.pitcherId);
+    setLoggedIds(prev => {
+      if (prev.has(pidStr)) return prev;
+      setLoggedCount(c => c + 1);
+      return new Set(prev).add(pidStr);
+    });
 
-    const prediction = {
-      id: `${dateStr}-${projection.pitcherId}-${Date.now()}`,
-      date: dateStr,
-      ...projection,
-      loggedAt: new Date().toISOString(),
-    };
-
-    all.push(prediction);
-    writePredictions(all);
-    setLoggedCount(c => c + 1);
-    setLoggedIds(prev => new Set(prev).add(String(projection.pitcherId)));
-  }, []);
+    // Chain onto the queue — each request waits for the previous to finish
+    logQueue.current = logQueue.current.then(async () => {
+      try {
+        await fetch('/api/predictions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: dateStr, ...projection }),
+        });
+      } catch { /* silent — optimistic already applied */ }
+    });
+  }, [isAdmin]);
 
   // Compute date string for the selected offset
   const getDateStr = (offset) => {
@@ -1085,14 +1223,20 @@ export default function TheWhiff() {
       const savantFetches = pitcherIds.map(id =>
         Promise.all([
           fetch(`/api/savant?type=pitcher_profile&mlbam_id=${id}`).then(r => r.json()).catch(() => null),
+          // Fallback: 2025 profile if 2026 has no data
+          fetch(`/api/savant?type=pitcher_profile&mlbam_id=${id}&season=2025`).then(r => r.json()).catch(() => null),
           fetch(`/api/savant?type=vs_batter&pitcher_id=${id}`).then(r => r.json()).catch(() => null),
-        ]).then(([profile, vsBatter]) => ({ id, profile, vsBatter }))
+        ]).then(([profile, profile2025, vsBatter]) => ({ id, profile, profile2025, vsBatter }))
       );
 
       const savantResults = await Promise.all(savantFetches);
       const newSavant = {};
-      for (const { id, profile, vsBatter } of savantResults) {
-        newSavant[id] = { ...profile, vs_batter: vsBatter };
+      for (const { id, profile, profile2025, vsBatter } of savantResults) {
+        // Use 2026 profile if it has swstr_pct, otherwise fall back to 2025
+        const useProfile = (profile?.swstr_pct != null && !profile?.error) ? profile
+          : (profile2025?.swstr_pct != null && !profile2025?.error) ? { ...profile2025, _fallback2025: true }
+          : profile;
+        newSavant[id] = { ...useProfile, vs_batter: vsBatter };
       }
       setSavantData(newSavant);
 
@@ -1160,6 +1304,25 @@ export default function TheWhiff() {
 
   useEffect(() => { load(selectedDate); }, [selectedDate]);
 
+  // Live K polling — fetch boxscores every 30s for in-progress games
+  useEffect(() => {
+    const liveGames = games.filter(g => g.status === 'In Progress');
+    if (!liveGames.length) { setLiveData({}); return; }
+
+    const fetchLive = async () => {
+      try {
+        const pks = liveGames.map(g => g.gamePk).join(',');
+        const res = await fetch(`/api/live?gamePks=${pks}`);
+        const data = await res.json();
+        setLiveData(data.games || {});
+      } catch { /* silent */ }
+    };
+
+    fetchLive(); // immediate
+    const interval = setInterval(fetchLive, 30000);
+    return () => clearInterval(interval);
+  }, [games]);
+
   const preGames  = games.filter(g => gameState(g.status) === 'pre');
   const liveGames = games.filter(g => gameState(g.status) === 'live');
   const doneGames = games.filter(g => ['final','cancelled'].includes(gameState(g.status)));
@@ -1182,93 +1345,186 @@ export default function TheWhiff() {
           borderBottom: '1px solid rgba(255,45,45,0.15)',
           padding: '14px 20px', position: 'sticky', top: 0, zIndex: 100,
         }}>
-          <div style={{ maxWidth: 1240, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <img src="/img/whiff.png" width={38} height={38} style={{ objectFit: 'contain', borderRadius: 9 }} />
-              <div>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
-                  <span style={{ fontSize: 10, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.2em' }}>THE</span>
-                  <span style={{
-                    fontSize: 20, fontWeight: 900, color: '#f1f5f9',
-                    fontFamily: "'Playfair Display', Georgia, serif",
-                    fontStyle: 'italic', letterSpacing: '-0.5px',
-                  }}>WHIFF<span style={{ color: '#ee0c0c' }}>.</span></span>
-                </div>
-                <div style={{ fontSize: 10, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: -2 }}>
-                  Pitcher Strikeout Intelligence
-                </div>
-              </div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {/* Date nav */}
-              <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: 2, gap: 1 }}>
-                <button
-                  onClick={() => setSelectedDate(-1)}
-                  disabled={loading}
-                  style={{
-                    background: selectedDate === -1 ? 'rgba(255,255,255,0.1)' : 'transparent',
-                    border: 'none', color: selectedDate === -1 ? '#f1f5f9' : '#64748b',
-                    borderRadius: 6, padding: '5px 10px', cursor: 'pointer',
-                    fontSize: 11, fontWeight: selectedDate === -1 ? 700 : 400,
-                    transition: 'all 0.15s',
-                  }}
-                >← Yesterday</button>
-                <button
-                  onClick={() => setSelectedDate(0)}
-                  disabled={loading}
-                  style={{
-                    background: selectedDate === 0 ? 'rgba(255,45,45,0.2)' : 'transparent',
-                    border: 'none', color: selectedDate === 0 ? '#ff6b6b' : '#64748b',
-                    borderRadius: 6, padding: '5px 10px', cursor: 'pointer',
-                    fontSize: 11, fontWeight: selectedDate === 0 ? 700 : 400,
-                    transition: 'all 0.15s',
-                  }}
-                >Today</button>
-                <button
-                  onClick={() => setSelectedDate(1)}
-                  disabled={loading}
-                  style={{
-                    background: selectedDate === 1 ? 'rgba(255,255,255,0.1)' : 'transparent',
-                    border: 'none', color: selectedDate === 1 ? '#f1f5f9' : '#64748b',
-                    borderRadius: 6, padding: '5px 10px', cursor: 'pointer',
-                    fontSize: 11, fontWeight: selectedDate === 1 ? 700 : 400,
-                    transition: 'all 0.15s',
-                  }}
-                >Tomorrow →</button>
-              </div>
+          <div style={{ maxWidth: 1240, margin: '0 auto' }}>
 
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 11, color: '#94a3b8' }}>{getDateLabel(selectedDate)}</div>
-                {lastRefresh && <div style={{ fontSize: 10, color: '#475569' }}>Updated {lastRefresh.toLocaleTimeString()}</div>}
+            {/* Mobile header row: logo + hamburger */}
+            <div className="mobile-only" style={{ alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <img src="/img/whiff.png" width={38} height={38} style={{ objectFit: 'contain', borderRadius: 9 }} />
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                    <span style={{ fontSize: 10, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.2em' }}>THE</span>
+                    <span style={{
+                      fontSize: 20, fontWeight: 900, color: '#f1f5f9',
+                      fontFamily: "'Playfair Display', Georgia, serif",
+                      fontStyle: 'italic', letterSpacing: '-0.5px',
+                    }}>WHIFF<span style={{ color: '#ee0c0c' }}>.</span></span>
+                  </div>
+                  <div style={{ fontSize: 10, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: -2 }}>
+                    Pitcher Strikeout Intelligence
+                  </div>
+                </div>
               </div>
-
-              <Link href="/results" style={{
-                color: '#64748b', fontSize: 11, textDecoration: 'none',
-                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: 6, padding: '5px 10px',
-                display: 'flex', alignItems: 'center', gap: 5,
-              }}>
-                📊
-                {loggedCount > 0 && (
-                  <span style={{
-                    background: '#dc2626', color: '#fff',
-                    borderRadius: '50%', width: 16, height: 16,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 9, fontWeight: 700,
-                  }}>{loggedCount}</span>
+              <button
+                onClick={() => setMobileMenuOpen(o => !o)}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: '#f1f5f9', position: 'relative', padding: '4px 8px' }}
+              >
+                ☰
+                {mobileMenuOpen && (
+                  <div style={{ position: 'absolute', right: 0, top: '100%', background: '#0a0f1e', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: 8, zIndex: 200, display: 'flex', flexDirection: 'column', gap: 4, minWidth: 160 }}>
+                    <Link href="/results" style={{ color: '#cbd5e1', fontSize: 14, textDecoration: 'none', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      📊 Results
+                      {loggedCount > 0 && (
+                        <span style={{ background: '#dc2626', color: '#fff', borderRadius: '50%', width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700 }}>{loggedCount}</span>
+                      )}
+                    </Link>
+                    <Link href="/changelog" style={{ color: '#cbd5e1', fontSize: 14, textDecoration: 'none', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      📋 Changelog
+                    </Link>
+                  </div>
                 )}
-              </Link>
-
-              <button onClick={() => load(selectedDate)} disabled={loading} style={{
-                background: loading ? 'rgba(255,45,45,0.06)' : 'rgba(255,45,45,0.12)',
-                border: '1px solid rgba(255,45,45,0.3)', color: '#ff6b6b',
-                borderRadius: 7, padding: '8px 14px', cursor: loading ? 'not-allowed' : 'pointer',
-                fontSize: 12, fontWeight: 700,
-              }}>
-                {loading ? '⟳' : '↻'}
               </button>
             </div>
+
+            {/* Desktop layout — hidden on mobile */}
+            <div className="desktop-only" style={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <img src="/img/whiff.png" width={38} height={38} style={{ objectFit: 'contain', borderRadius: 9 }} />
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                    <span style={{ fontSize: 10, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.2em' }}>THE</span>
+                    <span style={{
+                      fontSize: 20, fontWeight: 900, color: '#f1f5f9',
+                      fontFamily: "'Playfair Display', Georgia, serif",
+                      fontStyle: 'italic', letterSpacing: '-0.5px',
+                    }}>WHIFF<span style={{ color: '#ee0c0c' }}>.</span></span>
+                  </div>
+                  <div style={{ fontSize: 10, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: -2 }}>
+                    Pitcher Strikeout Intelligence
+                  </div>
+                </div>
+              </div>
+              <div className="desktop-only" style={{ alignItems: 'center', gap: 8 }}>
+                {/* Date nav */}
+                <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: 2, gap: 1 }}>
+                  <button
+                    onClick={() => setSelectedDate(-1)}
+                    disabled={loading}
+                    style={{
+                      background: selectedDate === -1 ? 'rgba(255,255,255,0.1)' : 'transparent',
+                      border: 'none', color: selectedDate === -1 ? '#f1f5f9' : '#64748b',
+                      borderRadius: 6, padding: '5px 10px', cursor: 'pointer',
+                      fontSize: 11, fontWeight: selectedDate === -1 ? 700 : 400,
+                      transition: 'all 0.15s',
+                    }}
+                  >← Yesterday</button>
+                  <button
+                    onClick={() => setSelectedDate(0)}
+                    disabled={loading}
+                    style={{
+                      background: selectedDate === 0 ? 'rgba(255,45,45,0.2)' : 'transparent',
+                      border: 'none', color: selectedDate === 0 ? '#ff6b6b' : '#64748b',
+                      borderRadius: 6, padding: '5px 10px', cursor: 'pointer',
+                      fontSize: 11, fontWeight: selectedDate === 0 ? 700 : 400,
+                      transition: 'all 0.15s',
+                    }}
+                  >Today</button>
+                  <button
+                    onClick={() => setSelectedDate(1)}
+                    disabled={loading}
+                    style={{
+                      background: selectedDate === 1 ? 'rgba(255,255,255,0.1)' : 'transparent',
+                      border: 'none', color: selectedDate === 1 ? '#f1f5f9' : '#64748b',
+                      borderRadius: 6, padding: '5px 10px', cursor: 'pointer',
+                      fontSize: 11, fontWeight: selectedDate === 1 ? 700 : 400,
+                      transition: 'all 0.15s',
+                    }}
+                  >Tomorrow →</button>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 11, color: '#94a3b8' }}>{getDateLabel(selectedDate)}</div>
+                  {lastRefresh && <div style={{ fontSize: 10, color: '#475569' }}>Updated {lastRefresh.toLocaleTimeString()}</div>}
+                </div>
+                <Link href="/results" style={{
+                  color: '#64748b', fontSize: 11, textDecoration: 'none',
+                  background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: 6, padding: '5px 10px',
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  minHeight: 32,
+                }}>
+                  📊
+                  {loggedCount > 0 && (
+                    <span style={{
+                      background: '#dc2626', color: '#fff',
+                      borderRadius: '50%', width: 16, height: 16,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 9, fontWeight: 700,
+                    }}>{loggedCount}</span>
+                  )}
+                </Link>
+                <Link href="/changelog" style={{
+                  color: '#64748b', fontSize: 11, textDecoration: 'none',
+                  background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: 6, padding: '5px 10px',
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  minHeight: 32,
+                }}>
+                  📋
+                </Link>
+                {isAdmin && !migrated && typeof window !== 'undefined' && (() => {
+                  try { const ls = JSON.parse(localStorage.getItem('whiff_predictions') || '[]'); if (ls.length > 0) return true; } catch { return false; }
+                })() && (
+                  <button onClick={async () => {
+                    try {
+                      const ls = JSON.parse(localStorage.getItem('whiff_predictions') || '[]');
+                      if (!ls.length) return;
+                      const res = await fetch('/api/predictions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ predictions: ls }),
+                      });
+                      const data = await res.json();
+                      if (data.ok) {
+                        setMigrated(true);
+                        localStorage.removeItem('whiff_predictions');
+                        alert(`Migrated ${data.imported} predictions to server. ${data.total} total.`);
+                      }
+                    } catch (e) { alert('Migration failed: ' + e.message); }
+                  }} style={{
+                    background: 'rgba(255,200,0,0.15)', border: '1px solid rgba(255,200,0,0.3)',
+                    color: '#fbbf24', borderRadius: 7, padding: '5px 10px', cursor: 'pointer',
+                    fontSize: 10, fontWeight: 700, minHeight: 32,
+                  }}>
+                    ⬆ Migrate Local
+                  </button>
+                )}
+                <button onClick={() => load(selectedDate)} disabled={loading} style={{
+                  background: loading ? 'rgba(255,45,45,0.06)' : 'rgba(255,45,45,0.12)',
+                  border: '1px solid rgba(255,45,45,0.3)', color: '#ff6b6b',
+                  borderRadius: 7, padding: '8px 14px', cursor: loading ? 'not-allowed' : 'pointer',
+                  fontSize: 12, fontWeight: 700,
+                }}>
+                  {loading ? '⟳' : '↻'}
+                </button>
+              </div>
+            </div>
+
+
+
           </div>
+        </div>
+
+        {/* Mobile toolbar */}
+        <div className="mobile-only" style={{ flexDirection: 'column', alignItems: 'center', gap: 8, padding: '12px 20px', background: '#0f172a' }}>
+          <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: 2, gap: 1 }}>
+            <button onClick={() => setSelectedDate(-1)} disabled={loading} style={{ background: selectedDate === -1 ? 'rgba(255,255,255,0.1)' : 'transparent', border: 'none', color: selectedDate === -1 ? '#f1f5f9' : '#64748b', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 11, fontWeight: selectedDate === -1 ? 700 : 400 }}>← Yesterday</button>
+            <button onClick={() => setSelectedDate(0)} disabled={loading} style={{ background: selectedDate === 0 ? 'rgba(255,45,45,0.2)' : 'transparent', border: 'none', color: selectedDate === 0 ? '#ff6b6b' : '#64748b', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 11, fontWeight: selectedDate === 0 ? 700 : 400 }}>Today</button>
+            <button onClick={() => setSelectedDate(1)} disabled={loading} style={{ background: selectedDate === 1 ? 'rgba(255,255,255,0.1)' : 'transparent', border: 'none', color: selectedDate === 1 ? '#f1f5f9' : '#64748b', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 11, fontWeight: selectedDate === 1 ? 700 : 400 }}>Tomorrow →</button>
+          </div>
+          <div style={{ fontSize: 12, color: '#94a3b8' }}>{getDateLabel(selectedDate)}</div>
+          <button onClick={() => load(selectedDate)} disabled={loading} style={{ background: 'rgba(255,45,45,0.15)', border: '1px solid rgba(255,45,45,0.3)', color: '#ff6b6b', borderRadius: 8, padding: '10px 0', width: '100%', maxWidth: 400, fontSize: 13, fontWeight: 700 }}>
+            ↻ Refresh
+          </button>
         </div>
 
         <div style={{ maxWidth: 1240, margin: '0 auto', padding: '20px 20px 60px' }}>
@@ -1318,7 +1574,7 @@ export default function TheWhiff() {
                 { l: 'Pre-Game', v: preGames.length,  c: '#e2e8f0', tc: '#475569' },
                 { l: '🔴 Live',  v: liveGames.length, c: '#fef2f2', tc: '#dc2626' },
                 { l: '✓ Final',  v: doneGames.length, c: '#f8fafc', tc: '#94a3b8' },
-                ...(selectedDate >= 0 ? [{ l: 'FD Lines', v: propsData.filter(p => p.lines?.fanduel).length, c: '#fffbeb', tc: '#92400e' }] : []),
+
               ].map(({ l, v, c, tc }) => (
                 <div key={l} style={{ background: c, border: `1px solid ${c}`, borderRadius: 7, padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 10, color: tc, textTransform: 'uppercase', letterSpacing: '0.07em', opacity: 0.7 }}>{l}</span>
@@ -1348,7 +1604,7 @@ export default function TheWhiff() {
           )}
 
           {/* Game grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(560px, 1fr))', gap: 16 }}>
+          <div className="game-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(560px, 1fr))', gap: 16 }}>
             {sortedGames.map(g => (
               <GameCard
                 key={g.gamePk}
@@ -1363,6 +1619,8 @@ export default function TheWhiff() {
                 allBvpData={bvpData}
                 onLogProjection={handleLogProjection}
                 loggedIds={loggedIds}
+                isAdmin={isAdmin}
+                liveGameData={liveData[g.gamePk] ?? null}
               />
             ))}
           </div>
@@ -1376,6 +1634,39 @@ export default function TheWhiff() {
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: #0f172a; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+        /* Desktop/mobile visibility classes */
+        .desktop-only { display: flex; }
+        .mobile-only { display: none; }
+        .mobile-menu-dropdown { display: none; }
+        /* Desktop weather: shown by default; mobile inline weather: hidden by default */
+        .game-weather-mobile { display: none !important; }
+        .game-weather-desktop { display: inline; }
+
+        @media (max-width: 640px) {
+          .desktop-only { display: none !important; }
+          .mobile-only { display: flex !important; }
+          .mobile-menu-dropdown { display: flex !important; }
+        }
+
+        @media (max-width: 639px) {
+          .pitcher-panels { flex-direction: column !important; }
+          .pitcher-panels > .pitcher-divider { width: 100% !important; height: 1px !important; }
+          .header-nav { flex-direction: column !important; align-items: flex-start !important; gap: 6px !important; }
+          .header-inner { padding: 10px 12px !important; flex-wrap: wrap !important; }
+          .date-label { display: none !important; }
+          .game-grid { grid-template-columns: 1fr !important; }
+          .summary-cards { grid-template-columns: repeat(2, 1fr) !important; }
+          button, a[role=button] { min-height: 44px; }
+          .touch-target { min-height: 44px !important; display: flex !important; align-items: center !important; }
+
+          /* Game card header: inline weather on mobile */
+          .game-weather-desktop { display: none !important; }
+          .game-weather-mobile { display: inline !important; }
+          .game-card-header-left { gap: 6px !important; }
+          .game-card-header-left span { font-size: 10px; }
+          .game-header-meta { font-size: 10px !important; }
+        }
       `}</style>
     </>
   );

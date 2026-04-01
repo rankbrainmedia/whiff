@@ -15,7 +15,7 @@ const BASE = 'https://statsapi.mlb.com/api/v1';
 // Career BvP stats for this batter vs this pitcher
 async function getBatterVsPitcherKRate(batterId, pitcherId) {
   try {
-    const url = `${BASE}/people/${batterId}/stats?stats=vsPlayer&group=hitting&opposingPlayerId=${pitcherId}&season=2025&season=2024`;
+    const url = `${BASE}/people/${batterId}/stats?stats=vsPlayer&group=hitting&opposingPlayerId=${pitcherId}&season=2026&season=2025&season=2024&season=2023&season=2022`;
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = await res.json();

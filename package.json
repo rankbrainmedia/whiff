@@ -8,6 +8,10 @@
     "start": "next start"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.81.0",
+    "@google/generative-ai": "^0.24.1",
+    "@supabase/supabase-js": "^2.101.1",
+    "@vercel/blob": "^2.3.2",
     "next": "14.2.3",
     "react": "^18",
     "react-dom": "^18"

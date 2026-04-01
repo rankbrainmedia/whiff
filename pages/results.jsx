@@ -41,8 +41,6 @@ function summarize(predictions) {
   const losses = settled.filter(p => p.result === 'LOSS').length;
   const pushes = settled.filter(p => p.result === 'PUSH').length;
 
-  // Simple ROI: assume -110 (standard juice) for each settled bet
-  // WIN: +0.909 units, LOSS: -1 unit, PUSH: 0
   let totalUnits = 0;
   for (const p of settled) {
     if (p.result === 'WIN') {
@@ -65,12 +63,10 @@ function summarize(predictions) {
   };
 }
 
-// Calibration buckets: group by projected K̂ and compare to actual
 function buildCalibration(predictions) {
   const settled = predictions.filter(p => p.actualK != null && p.kHat != null);
   if (!settled.length) return [];
 
-  // Bucket by K̂ in 1-K increments
   const buckets = {};
   for (const p of settled) {
     const bucket = Math.floor(p.kHat);
@@ -89,7 +85,6 @@ function buildCalibration(predictions) {
     }));
 }
 
-// ROI by confidence grade
 function roiByGrade(predictions) {
   const grades = ['A', 'B', 'C', 'D'];
   return grades.map(grade => {
@@ -99,22 +94,79 @@ function roiByGrade(predictions) {
   }).filter(g => g.total > 0);
 }
 
+function computeResult(actualK, line, signal) {
+  if (actualK == null || line == null || !signal) return null;
+  if (actualK === line) return 'PUSH';
+  if (signal === 'OVER')  return actualK > line ? 'WIN' : 'LOSS';
+  if (signal === 'UNDER') return actualK < line ? 'WIN' : 'LOSS';
+  return null;
+}
+
+function fmtLoggedAt(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('en-US', {
+      month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: '2-digit',
+      timeZoneName: 'short',
+    });
+  } catch {
+    return '—';
+  }
+}
+
 export default function Results() {
   const [predictions, setPredictions] = useState([]);
   const [loading, setLoading]         = useState(true);
-  const [filter, setFilter]           = useState('all'); // all | OVER | UNDER
+  const [filter, setFilter]           = useState('all');
+  const [editingId, setEditingId]     = useState(null);
+  const [editValue, setEditValue]     = useState('');
+  const [isAdmin, setIsAdmin]         = useState(false);
 
   useEffect(() => {
-    try {
-      const all = JSON.parse(localStorage.getItem('whiff_predictions') || '[]');
-      // Sort newest first
-      all.sort((a, b) => new Date(b.loggedAt) - new Date(a.loggedAt));
-      setPredictions(all);
-    } catch {
-      setPredictions([]);
+    async function loadData() {
+      try {
+        const [predsRes, adminRes] = await Promise.all([
+          fetch('/api/predictions'),
+          fetch('/api/admin'),
+        ]);
+        const predsData = await predsRes.json();
+        const adminData = await adminRes.json();
+
+        const all = predsData.predictions || [];
+        all.sort((a, b) => new Date(b.loggedAt) - new Date(a.loggedAt));
+        setPredictions(all);
+        setIsAdmin(adminData.isAdmin === true);
+      } catch {
+        setPredictions([]);
+      }
+      setLoading(false);
     }
-    setLoading(false);
+    loadData();
   }, []);
+
+  async function saveActualK(predId, rawValue) {
+    const val = rawValue.trim() === '' ? null : parseInt(rawValue, 10);
+    if (rawValue.trim() !== '' && (isNaN(val) || val < 0)) return;
+
+    setEditingId(null);
+    setEditValue('');
+
+    if (!isAdmin) return;
+
+    try {
+      const res = await fetch('/api/predictions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: predId, actualK: val }),
+      });
+      if (res.ok) {
+        const { prediction } = await res.json();
+        setPredictions(prev => prev.map(p => p.id === predId ? prediction : p));
+      }
+    } catch { /* silent */ }
+  }
 
   const filtered = filter === 'all'
     ? predictions.filter(p => p.signal === 'OVER' || p.signal === 'UNDER')
@@ -158,13 +210,35 @@ export default function Results() {
                 </div>
               </div>
             </div>
-            <Link href="/" style={{
-              color: '#94a3b8', fontSize: 12, textDecoration: 'none',
-              background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: 7, padding: '6px 14px',
-            }}>
-              ← Today's Slate
-            </Link>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Link href="/changelog" style={{
+                color: '#94a3b8', fontSize: 12, textDecoration: 'none',
+                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 7, padding: '6px 14px',
+              }}>
+                📋 Changelog
+              </Link>
+              <Link href="/" style={{
+                color: '#94a3b8', fontSize: 12, textDecoration: 'none',
+                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 7, padding: '6px 14px',
+              }}>
+                ← Today's Slate
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        {/* Public trust banner */}
+        <div style={{
+          background: 'rgba(22,163,74,0.1)', borderBottom: '1px solid rgba(22,163,74,0.2)',
+          padding: '10px 20px',
+        }}>
+          <div style={{ maxWidth: 1100, margin: '0 auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 14 }}>🔒</span>
+            <span style={{ fontSize: 12, color: '#86efac' }}>
+              All predictions are logged before first pitch. Timestamps are server-generated.
+            </span>
           </div>
         </div>
 
@@ -176,16 +250,16 @@ export default function Results() {
 
           {!loading && predictions.length === 0 && (
             <div style={{
-              background: '#fff', borderRadius: 14, padding: '60px 40px', textAlign: 'center',
-              border: '1px solid #e2e8f0',
+              background: 'rgba(255,255,255,0.05)', borderRadius: 14, padding: '60px 40px', textAlign: 'center',
+              border: '1px solid rgba(255,255,255,0.1)',
             }}>
               <div style={{ fontSize: 42, marginBottom: 12 }}>📊</div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: '#0f172a', marginBottom: 8 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#f1f5f9', marginBottom: 8 }}>
                 No predictions logged yet
               </div>
               <div style={{ fontSize: 13, color: '#64748b', maxWidth: 360, margin: '0 auto' }}>
-                Projections are logged when you click "Log Projection" on a game card.
-                After games finish, enter actual K totals to track results.
+                Projections are logged when the admin clicks "Log Projection" on a game card.
+                After games finish, actual K totals are entered to track results.
               </div>
             </div>
           )}
@@ -215,7 +289,7 @@ export default function Results() {
               </div>
 
               {/* Summary cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12, marginBottom: 24 }}>
+              <div className="summary-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12, marginBottom: 24 }}>
                 {[
                   { label: 'Hit Rate', value: fmtPct(overall.hitRate), highlight: overall.hitRate != null && overall.hitRate > 0.55 },
                   { label: 'Record', value: overall.settled > 0 ? `${overall.wins}–${overall.losses}${overall.pushes > 0 ? `–${overall.pushes}` : ''}` : '—' },
@@ -225,17 +299,16 @@ export default function Results() {
                   { label: 'Settled', value: overall.settled },
                 ].map(({ label, value, highlight }) => (
                   <div key={label} style={{
-                    background: '#fff', borderRadius: 10,
-                    border: '1px solid #e2e8f0',
+                    background: 'rgba(255,255,255,0.05)', borderRadius: 10,
+                    border: '1px solid rgba(255,255,255,0.1)',
                     padding: '16px 18px',
-                    boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
                   }}>
-                    <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                    <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
                       {label}
                     </div>
                     <div style={{
                       fontSize: 22, fontWeight: 800, fontFamily: 'monospace',
-                      color: highlight ? '#16a34a' : '#0f172a',
+                      color: highlight ? '#4ade80' : '#f1f5f9',
                     }}>
                       {value}
                     </div>
@@ -243,22 +316,22 @@ export default function Results() {
                 ))}
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 24 }}>
+              <div className="perf-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 24 }}>
 
                 {/* ROI by grade */}
-                <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 20 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a', marginBottom: 14 }}>
+                <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)', padding: 20 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#f1f5f9', marginBottom: 14 }}>
                     Performance by Confidence Grade
                   </div>
                   {gradStats.length === 0 ? (
-                    <div style={{ fontSize: 12, color: '#94a3b8' }}>No data yet</div>
+                    <div style={{ fontSize: 12, color: '#64748b' }}>No data yet</div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                       {gradStats.map(({ grade, wins, losses, pushes, hitRate, roi, settled, total }) => (
                         <div key={grade} style={{
                           display: 'flex', alignItems: 'center', gap: 10,
                           padding: '8px 10px', borderRadius: 8,
-                          background: '#f8fafc', border: '1px solid #f1f5f9',
+                          background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
                         }}>
                           <div style={{
                             width: 28, height: 28, borderRadius: 6, flexShrink: 0,
@@ -268,9 +341,9 @@ export default function Results() {
                             fontSize: 13, fontWeight: 800, color: gradeColor(grade),
                           }}>{grade}</div>
                           <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: 12, fontWeight: 600, color: '#0f172a' }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: '#f1f5f9' }}>
                               {settled > 0 ? `${wins}–${losses}${pushes > 0 ? `–${pushes}` : ''}` : '—'}
-                              <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 6 }}>({total} total)</span>
+                              <span style={{ fontSize: 10, color: '#64748b', marginLeft: 6 }}>({total} total)</span>
                             </div>
                             <div style={{ fontSize: 11, color: '#64748b' }}>
                               Hit {fmtPct(hitRate)} · ROI {fmtPct(roi)}
@@ -283,30 +356,30 @@ export default function Results() {
                 </div>
 
                 {/* Calibration */}
-                <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 20 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a', marginBottom: 14 }}>
+                <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)', padding: 20 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#f1f5f9', marginBottom: 14 }}>
                     Calibration (Projected vs Actual K)
                   </div>
                   {calibration.length === 0 ? (
-                    <div style={{ fontSize: 12, color: '#94a3b8' }}>No settled games with actuals yet</div>
+                    <div style={{ fontSize: 12, color: '#64748b' }}>No settled games with actuals yet</div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                       {calibration.map(({ label, projectedAvg, actualAvg, count }) => {
                         const diff = actualAvg - projectedAvg;
-                        const diffColor = Math.abs(diff) < 0.5 ? '#16a34a' : Math.abs(diff) < 1.0 ? '#d97706' : '#dc2626';
+                        const diffColor = Math.abs(diff) < 0.5 ? '#4ade80' : Math.abs(diff) < 1.0 ? '#fbbf24' : '#f87171';
                         return (
                           <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11 }}>
                             <span style={{ width: 50, color: '#64748b', fontFamily: 'monospace' }}>{label}K</span>
-                            <span style={{ width: 50, color: '#94a3b8', fontFamily: 'monospace' }}>proj {fmt(projectedAvg, 1)}</span>
-                            <span style={{ width: 50, color: '#0f172a', fontFamily: 'monospace', fontWeight: 600 }}>act {fmt(actualAvg, 1)}</span>
+                            <span style={{ flex: 1, color: '#94a3b8', fontFamily: 'monospace' }}>proj {fmt(projectedAvg, 1)}</span>
+                            <span style={{ flex: 1, color: '#f1f5f9', fontFamily: 'monospace', fontWeight: 600 }}>act {fmt(actualAvg, 1)}</span>
                             <span style={{ color: diffColor, fontFamily: 'monospace', fontWeight: 700 }}>
                               {diff >= 0 ? '+' : ''}{fmt(diff, 1)}
                             </span>
-                            <span style={{ color: '#cbd5e1', marginLeft: 'auto' }}>n={count}</span>
+                            <span style={{ color: '#475569', marginLeft: 'auto' }}>n={count}</span>
                           </div>
                         );
                       })}
-                      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 4 }}>
+                      <div style={{ fontSize: 10, color: '#475569', marginTop: 4 }}>
                         Green = within 0.5 K · Yellow = within 1 K · Red = &gt;1 K off
                       </div>
                     </div>
@@ -315,35 +388,55 @@ export default function Results() {
               </div>
 
               {/* Predictions table */}
-              <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9' }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: '#0f172a' }}>All Predictions</span>
+              <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                <div style={{ padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: '#f1f5f9' }}>All Predictions</span>
+                  {!isAdmin && (
+                    <span style={{ fontSize: 10, color: '#64748b', marginLeft: 12 }}>
+                      Timestamps prove pre-game logging
+                    </span>
+                  )}
                 </div>
 
                 <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                  <table className="pred-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                     <thead>
-                      <tr style={{ background: '#f8fafc' }}>
-                        {['Date', 'Pitcher', 'Signal', 'K̂', 'BF̂', 'Line', 'Edge', 'Grade', 'Actual', 'Result'].map(h => (
-                          <th key={h} style={{
+                      <tr style={{ background: 'rgba(255,255,255,0.03)' }}>
+                        {[
+                          { label: 'Date', cls: '' },
+                          { label: 'Logged At', cls: 'col-logged' },
+                          { label: 'Pitcher', cls: '' },
+                          { label: 'Signal', cls: '' },
+                          { label: 'K̂', cls: '' },
+                          { label: 'BF̂', cls: 'col-bf' },
+                          { label: 'Line', cls: '' },
+                          { label: 'Edge', cls: 'col-edge' },
+                          { label: 'Grade', cls: 'col-grade' },
+                          { label: 'Actual', cls: '' },
+                          { label: 'Result', cls: '' },
+                        ].map(h => (
+                          <th key={h.label} className={h.cls} style={{
                             padding: '8px 12px', textAlign: 'left',
-                            fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em',
-                            fontWeight: 600, borderBottom: '1px solid #e2e8f0',
-                          }}>{h}</th>
+                            fontSize: 9, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em',
+                            fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.08)',
+                          }}>{h.label}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {filtered.map((p, i) => (
                         <tr key={p.id} style={{
-                          borderBottom: i < filtered.length - 1 ? '1px solid #f8fafc' : 'none',
-                          background: i % 2 === 0 ? '#fff' : '#fafafa',
+                          borderBottom: i < filtered.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                          background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)',
                         }}>
                           <td style={{ padding: '7px 12px', color: '#64748b', whiteSpace: 'nowrap' }}>{p.date}</td>
-                          <td style={{ padding: '7px 12px', color: '#0f172a', fontWeight: 600 }}>
+                          <td className="col-logged" style={{ padding: '7px 12px', color: '#475569', whiteSpace: 'nowrap', fontSize: 10 }}>
+                            {fmtLoggedAt(p.loggedAt)}
+                          </td>
+                          <td style={{ padding: '7px 12px', color: '#f1f5f9', fontWeight: 600 }}>
                             {p.pitcherName ?? `ID ${p.pitcherId}`}
                             {p.pitcherThrows && (
-                              <span style={{ fontSize: 9, color: '#94a3b8', marginLeft: 4 }}>{p.pitcherThrows}HP</span>
+                              <span style={{ fontSize: 9, color: '#64748b', marginLeft: 4 }}>{p.pitcherThrows}HP</span>
                             )}
                           </td>
                           <td style={{ padding: '7px 12px' }}>
@@ -352,13 +445,13 @@ export default function Results() {
                               fontSize: 10,
                             }}>{p.signal}</span>
                           </td>
-                          <td style={{ padding: '7px 12px', fontFamily: 'monospace', fontWeight: 700, color: '#0f172a' }}>
+                          <td style={{ padding: '7px 12px', fontFamily: 'monospace', fontWeight: 700, color: '#f1f5f9' }}>
                             {fmt(p.kHat)}
                           </td>
-                          <td style={{ padding: '7px 12px', fontFamily: 'monospace', color: '#64748b' }}>
+                          <td className="col-bf" style={{ padding: '7px 12px', fontFamily: 'monospace', color: '#64748b' }}>
                             {fmt(p.bfHat)}
                           </td>
-                          <td style={{ padding: '7px 12px', fontFamily: 'monospace', color: '#0f172a' }}>
+                          <td style={{ padding: '7px 12px', fontFamily: 'monospace', color: '#f1f5f9' }}>
                             {p.line != null ? (
                               <>
                                 {p.line}
@@ -375,34 +468,68 @@ export default function Results() {
                               </>
                             ) : '—'}
                           </td>
-                          <td style={{ padding: '7px 12px', fontFamily: 'monospace' }}>
-                            <span style={{ color: p.edge > 0 ? '#16a34a' : '#dc2626', fontWeight: 600 }}>
+                          <td className="col-edge" style={{ padding: '7px 12px', fontFamily: 'monospace' }}>
+                            <span style={{ color: p.edge > 0 ? '#4ade80' : '#f87171', fontWeight: 600 }}>
                               {fmtEdge(p.edge)}
                             </span>
                           </td>
-                          <td style={{ padding: '7px 12px' }}>
+                          <td className="col-grade" style={{ padding: '7px 12px' }}>
                             {p.grade && (
                               <span style={{
                                 color: gradeColor(p.grade), fontWeight: 700, fontSize: 12,
-                                background: gradeColor(p.grade) + '15',
+                                background: gradeColor(p.grade) + '20',
                                 border: `1px solid ${gradeColor(p.grade)}40`,
                                 borderRadius: 4, padding: '1px 6px',
                               }}>{p.grade}</span>
                             )}
                           </td>
-                          <td style={{ padding: '7px 12px', fontFamily: 'monospace', fontWeight: 600 }}>
-                            {p.actualK != null ? `${p.actualK}K` : '—'}
+                          <td
+                            style={{ padding: '7px 12px', fontFamily: 'monospace', fontWeight: 600, cursor: isAdmin ? 'pointer' : 'default', minWidth: 54 }}
+                            onClick={() => {
+                              if (!isAdmin) return;
+                              if (editingId !== p.id) {
+                                setEditingId(p.id);
+                                setEditValue(p.actualK != null ? String(p.actualK) : '');
+                              }
+                            }}
+                          >
+                            {isAdmin && editingId === p.id ? (
+                              <input
+                                autoFocus
+                                type="number"
+                                min="0"
+                                max="25"
+                                value={editValue}
+                                onChange={e => setEditValue(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') saveActualK(p.id, editValue);
+                                  if (e.key === 'Escape') { setEditingId(null); setEditValue(''); }
+                                }}
+                                onBlur={() => saveActualK(p.id, editValue)}
+                                style={{
+                                  width: 42, padding: '2px 4px', fontSize: 11,
+                                  fontFamily: 'monospace', fontWeight: 700,
+                                  border: '1.5px solid #ee0c0c', borderRadius: 4,
+                                  outline: 'none', textAlign: 'center',
+                                  background: '#1e0a0a', color: '#f1f5f9',
+                                }}
+                              />
+                            ) : (
+                              <span style={{ color: p.actualK != null ? '#f1f5f9' : '#334155' }}>
+                                {p.actualK != null ? `${p.actualK}K` : (isAdmin ? '—' : '—')}
+                              </span>
+                            )}
                           </td>
                           <td style={{ padding: '7px 12px' }}>
                             {p.result ? (
                               <span style={{
                                 color: resultColor(p.result), fontWeight: 700, fontSize: 10,
-                                background: resultColor(p.result) + '15',
+                                background: resultColor(p.result) + '20',
                                 border: `1px solid ${resultColor(p.result)}40`,
                                 borderRadius: 4, padding: '1px 6px',
                               }}>{p.result}</span>
                             ) : (
-                              <span style={{ color: '#cbd5e1', fontSize: 10 }}>pending</span>
+                              <span style={{ color: '#334155', fontSize: 10 }}>pending</span>
                             )}
                           </td>
                         </tr>
@@ -421,6 +548,16 @@ export default function Results() {
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: #0f172a; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+        @media (max-width: 639px) {
+          .summary-cards { grid-template-columns: repeat(2, 1fr) !important; }
+          .perf-grid { grid-template-columns: 1fr !important; }
+          /* Hide less critical columns on mobile */
+          .col-logged, .col-bf, .col-edge, .col-grade { display: none !important; }
+          /* Tighter padding */
+          .pred-table th, .pred-table td { padding: 6px 6px !important; font-size: 10px !important; }
+          .pred-table { min-width: unset !important; }
+        }
       `}</style>
     </>
   );

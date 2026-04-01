@@ -5,6 +5,7 @@ import {
   fetchPitcherInfo,
   fetchPitcherHandednessSplits,
 } from '../../../lib/mlb';
+import MODEL_CONFIG from '../../../lib/model-config.js';
 
 // Parse "6.2" innings pitched format to decimal innings
 function ipToDecimal(ip) {
@@ -70,7 +71,7 @@ export default async function handler(req, res) {
       battersFaced: extractBF(g.stat),
     }));
 
-    // Vs specific opposing team — search both seasons
+    // Vs specific opposing team — search both seasons; include isHome for anchor
     let vsTeam = [];
     if (opposingTeamId) {
       const tid = parseInt(opposingTeamId);
@@ -86,6 +87,7 @@ export default async function handler(req, res) {
         earnedRuns: g.stat?.earnedRuns,
         pitchCount: g.stat?.numberOfPitches,
         season: g.season,
+        isHome: g.isHome ?? null, // used by same-opponent anchor
       }));
     }
 
@@ -119,28 +121,40 @@ export default async function handler(req, res) {
     const seasonBF = meanBF(gameLog);                 // full current season avg
     const priorBF  = meanBF(priorGameLog);            // prior season avg
 
-    // ── v2: Pitcher K% (overall + handedness splits) ─────────────────────────
-    // Overall K% from season stats: K / BF
-    const seasonBF_total = activeStats?.battersFaced ?? null;
-    const seasonK_total  = activeStats?.strikeOuts ?? null;
-    const pitcherKPct = (seasonBF_total && seasonBF_total > 0 && seasonK_total != null)
+    // ── v3: Pitcher K% with Bayesian shrinkage ────────────────────────────────
+    // Use current-season stats specifically (not activeStats fallback) for K%
+    const seasonBF_total = seasonStats?.battersFaced ?? null;
+    const seasonK_total  = seasonStats?.strikeOuts ?? null;
+    const pitcherKPctRaw = (seasonBF_total && seasonBF_total > 0 && seasonK_total != null)
       ? seasonK_total / seasonBF_total
       : null;
 
-    // Current-season handedness splits (fall back to prior if current sample < 20 BF each)
-    let pitcherKPctVsL = splits.vsL;
-    let pitcherKPctVsR = splits.vsR;
+    // Prior season K% — used as the shrinkage prior
+    const priorKPct = (priorSeasonStats?.strikeOuts != null && (priorSeasonStats?.battersFaced ?? 0) > 0)
+      ? priorSeasonStats.strikeOuts / priorSeasonStats.battersFaced
+      : MODEL_CONFIG.league_k_pct; // fallback to league avg if no prior data
 
-    if ((splits.vsLBF ?? 0) < 20 && priorSplits.vsL != null) {
-      pitcherKPctVsL = pitcherKPctVsL != null
-        ? 0.6 * pitcherKPctVsL + 0.4 * priorSplits.vsL  // blend if some current data
-        : priorSplits.vsL;
-    }
-    if ((splits.vsRBF ?? 0) < 20 && priorSplits.vsR != null) {
-      pitcherKPctVsR = pitcherKPctVsR != null
-        ? 0.6 * pitcherKPctVsR + 0.4 * priorSplits.vsR
-        : priorSplits.vsR;
-    }
+    // Shrinkage blend: λ = currentBF / (currentBF + 150)
+    // λ=0 (no current data) → use prior straight; λ→1 (large sample) → trust current
+    const shrinkageBF = seasonBF_total || 0;
+    const lambda = shrinkageBF / (shrinkageBF + MODEL_CONFIG.k_rate_shrinkage_pa);
+    const pitcherKPct = pitcherKPctRaw != null
+      ? lambda * pitcherKPctRaw + (1 - lambda) * priorKPct
+      : priorKPct;
+
+    // Handedness splits — apply same shrinkage pattern with split-specific BF counts
+    const priorKPctVsL = priorSplits.vsL ?? priorKPct;
+    const priorKPctVsR = priorSplits.vsR ?? priorKPct;
+
+    const lambdaVsL = (splits.vsLBF ?? 0) / ((splits.vsLBF ?? 0) + MODEL_CONFIG.k_rate_shrinkage_pa);
+    const pitcherKPctVsL = splits.vsL != null
+      ? lambdaVsL * splits.vsL + (1 - lambdaVsL) * priorKPctVsL
+      : priorKPctVsL;
+
+    const lambdaVsR = (splits.vsRBF ?? 0) / ((splits.vsRBF ?? 0) + MODEL_CONFIG.k_rate_shrinkage_pa);
+    const pitcherKPctVsR = splits.vsR != null
+      ? lambdaVsR * splits.vsR + (1 - lambdaVsR) * priorKPctVsR
+      : priorKPctVsR;
 
     // Walk rate (BB/9) for BF drag calculation
     const pitcherBBPer9 = activeStats?.walksPer9Inn
@@ -190,10 +204,14 @@ export default async function handler(req, res) {
       recentBF,
       seasonBF,
       priorBF,
-      pitcherKPct,
-      pitcherKPctVsL,
-      pitcherKPctVsR,
+      pitcherKPct,        // shrunk value (use this for projections)
+      pitcherKPctRaw,     // unshrunk current-season value (display only)
+      pitcherKPctVsL,     // shrunk split
+      pitcherKPctVsR,     // shrunk split
       pitcherBBPer9,
+      // shrinkage metadata for display ("26.8% shrunk from 31.8%")
+      kShrinkageLambda: Math.round(lambda * 1000) / 1000,
+      kShrinkageBF: shrinkageBF,
     });
   } catch (err) {
     console.error(err);

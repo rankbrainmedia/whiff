@@ -2,9 +2,18 @@
   "functions": {
     "api/savant.py": {
       "maxDuration": 30
+    },
+    "api/cron/refresh-projections.js": {
+      "maxDuration": 300
     }
   },
   "rewrites": [
     { "source": "/api/savant/:path*", "destination": "/api/savant" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/refresh-projections",
+      "schedule": "0 * * * *"
+    }
   ]
 }
