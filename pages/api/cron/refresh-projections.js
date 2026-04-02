@@ -530,7 +530,16 @@ export default async function handler(req, res) {
 
       // Skip games that already started or are final
       const status = game.status?.detailedState ?? game.status?.abstractGameState;
-      if (['In Progress', 'Final', 'Game Over', 'Postponed', 'Cancelled'].includes(status)) {
+      if (['In Progress', 'Final', 'Game Over'].includes(status)) {
+        skipped++;
+        continue;
+      }
+
+      // Update cached projections for postponed/cancelled games so frontend can show PPD badge
+      if (['Postponed', 'Cancelled'].includes(status)) {
+        if (projections[gk]) {
+          projections[gk].status = status;
+        }
         skipped++;
         continue;
       }

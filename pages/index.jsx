@@ -435,11 +435,15 @@ function PitcherPanel({
   // ── v3 Projection: prefer cached (cron pipeline) over live computation ──
   // Cached projections include scout, narrator, same-opponent, team hot/cold.
   // Only fall back to live computation if cache is unavailable.
+  // EXCEPTION: if cached signal is NOLINE but live props are now available,
+  // recompute with live data so users see a real signal instead of "Proj XK".
   const cachedProj = cachedProjection?.projection ?? null;
   const cachedConf = cachedProjection?.confidence ?? null;
   const cachedFdLines = cachedProjection?.fdLines ?? null;
 
-  const v2 = isPre ? (cachedProj || computeProjectionV2({
+  const cachedIsStaleNoline = cachedProj?.signal === 'NOLINE' && fdLines?.over?.line != null;
+
+  const v2 = isPre ? ((!cachedIsStaleNoline && cachedProj) || computeProjectionV2({
     // Stage 1: BF
     recentBF, seasonBF, priorBF,
     starts: starts2026,
@@ -471,7 +475,7 @@ function PitcherPanel({
       }, 0) / lineup.length
     : 0;
 
-  const confidence = isPre ? (cachedConf || computeConfidence({
+  const confidence = isPre ? ((!cachedIsStaleNoline && cachedConf) || computeConfidence({
     has3PlusStarts: (starts2026 ?? 0) >= 3,
     hasLineup: (lineup?.length ?? 0) > 0,
     hasBvP: avgBvPLambda > 0.02,
@@ -482,7 +486,8 @@ function PitcherPanel({
   })) : null;
 
   // Use cached FD lines if available (ensures narrative matches displayed line)
-  const effectiveFdLines = cachedFdLines || fdLines;
+  // But if cache had no lines and live props do, prefer live props.
+  const effectiveFdLines = (cachedIsStaleNoline ? fdLines : cachedFdLines) || fdLines;
   const fdLine = effectiveFdLines?.over?.line ?? effectiveFdLines?.under?.line ?? null;
 
   const statsRows = [
@@ -978,6 +983,13 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
                 borderRadius: 4, padding: '2px 8px',
               }}>✓ Final</span>
             )}
+            {game.status === 'Postponed' && (
+              <span style={{
+                fontSize: 10, fontWeight: 700, color: '#d97706',
+                background: '#fffbeb', border: '1px solid #fde68a',
+                borderRadius: 4, padding: '2px 8px', letterSpacing: '0.06em',
+              }}>PPD</span>
+            )}
           </div>
           {weather?.found && !weather?.hasAlert && (
             <span style={{ fontSize: 13, color: '#1e293b', fontWeight: 600, fontStyle: 'italic', flexShrink: 0 }}>
@@ -1033,7 +1045,18 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
         </div>
       )}
 
-      {/* Pitchers side by side */}
+      {/* Postponed overlay — replaces pitcher panels */}
+      {game.status === 'Postponed' ? (
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          padding: '40px 20px', background: '#fffbeb', minHeight: 120,
+        }}>
+          <span style={{ fontSize: 28, marginBottom: 8 }}>🌧️</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#92400e', letterSpacing: '0.04em' }}>POSTPONED</span>
+          <span style={{ fontSize: 12, color: '#a16207', marginTop: 4 }}>This game has been rescheduled. Check MLB.com for the new date.</span>
+        </div>
+      ) : (
+      /* Pitchers side by side */
       <div className="pitcher-panels" style={{ display: 'flex', overflow: 'hidden' }}>
         <PitcherPanel
           pitcherData={awayPitcher}
@@ -1073,6 +1096,7 @@ function GameCard({ game, teamStatsMap, allPitcherData, allSavantData, propsData
           cachedProjection={cachedGame?.home ?? null}
         />
       </div>
+      )}
     </div>
   );
 }
