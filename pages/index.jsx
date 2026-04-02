@@ -560,10 +560,19 @@ function PitcherPanel({
               </span>
             </div>
           </div>
-          {avgKLast5 != null && (
+          {(v2?.kHat ?? avgKLast5) != null && (
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Projected</div>
-              <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: '#94a3b8' }}>{fmt(avgKLast5, 1)}K</div>
+              <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                {v2?.kHat ? 'Pre-Game K̂' : 'Avg K (L5)'}
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: '#94a3b8' }}>
+                {v2?.kHat ?? fmt(avgKLast5, 1)}K
+              </div>
+              {fdLine != null && (
+                <div style={{ fontSize: 9, color: '#475569', marginTop: 1 }}>
+                  Line: {fdLine}
+                </div>
+              )}
             </div>
           )}
         </div>
